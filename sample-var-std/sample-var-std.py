@@ -2,7 +2,7 @@ import numpy as np
 
 def sample_var_std(x):
     """
-    Compute sample variance and standard deviation. lfgkljkljkl
+    Compute sample variance and standard deviation. lfgkljkljkl random shit
     """
     # Write code here
     x = np.asarray(x, dtype=float)
