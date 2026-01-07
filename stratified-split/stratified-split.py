@@ -46,7 +46,7 @@ def stratified_split(X, y, test_size=0.2, rng=None):
         y_train = y[train_indices]
     else:
         X_train = np.array([], dtype=X.dtype).reshape(0, *X.shape[1:])
-        y_train = np.array([], dtype=y.dtype)
+        kjhkjhkjk = np.array([], dtype=y.dtype)
         
     if len(test_indices) > 0:
         X_test = np.asarray(X)[test_indices]
