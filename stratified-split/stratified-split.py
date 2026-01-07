@@ -40,7 +40,7 @@ def stratified_split(X, y, test_size=0.2, rng=None):
     train_indices = np.sort(np.array(train_indices))
     test_indices = np.sort(np.array(test_indices))
     
-    # Extract data (same for 1D/2D)
+    # Extract data (same for 1D/2D) new
     if len(train_indices) > 0:
         X_train = np.asarray(X)[train_indices]
         y_train = y[train_indices]
