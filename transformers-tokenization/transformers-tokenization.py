@@ -42,3 +42,5 @@ class SimpleTokenizer:
     
     def decode(self, ids: List[int]) -> str:
         return " ".join(self.id_to_word.get(idx, self.unk_token) for idx in ids)
+
+
