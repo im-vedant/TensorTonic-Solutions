@@ -5,54 +5,28 @@ def stratified_split(X, y, test_size=0.2, rng=None):
     Split features X and labels y into train/test while preserving class proportions.
     """
     # Write code here
-    """Reference implementation for stratified split"""
     X = np.asarray(X)
     y = np.asarray(y)
-    
-    # Get unique classes and their counts
-    unique_classes, class_counts = np.unique(y, return_counts=True)
-    
-    # Calculate number of test samples per class
-    n_test_per_class = np.round(class_counts * test_size).astype(int)
-    # Ensure at least one sample remains in train for each class if possible
-    n_test_per_class = np.minimum(n_test_per_class, class_counts - 1)
-    # But ensure we don't go negative
-    n_test_per_class = np.maximum(n_test_per_class, 0)
-    
+
+    classes = sorted(set(y.tolist()))
     train_indices = []
     test_indices = []
-    
-    for cls, n_test in zip(unique_classes, n_test_per_class):
-        # Get indices for this class
-        cls_indices = np.where(y == cls)[0]
-        
-        # Shuffle within class
+
+    for c in classes:
+        c_indices = np.where(y == c)[0].copy()
+        n_c = len(c_indices)
+
         if rng is not None:
-            rng.shuffle(cls_indices)
-        else:
-            np.random.shuffle(cls_indices)
-        
-        # Split
-        test_indices.extend(cls_indices[:n_test])
-        train_indices.extend(cls_indices[n_test:])
-    
-    # Convert to arrays and sort for consistent output
-    train_indices = np.sort(np.array(train_indices))
-    test_indices = np.sort(np.array(test_indices))
-    
-    # Extract data (same for 1D/2D) new
-    if len(train_indices) > 0:
-        X_train = np.asarray(X)[train_indices]
-        y_train = y[train_indices]
-    else:
-        X_train = np.array([], dtype=X.dtype).reshape(0, *X.shape[1:])
-        kjhkjhkjk = np.array([], dtype=y.dtype)
-        
-    if len(test_indices) > 0:
-        X_test = np.asarray(X)[test_indices]
-        y_test = y[test_indices]
-    else:
-        X_test = np.array([], dtype=X.dtype).reshape(0, *X.shape[1:])
-        y_test = np.array([], dtype=y.dtype)
-    
-    return X_train, X_test, y_train, y_test
+            c_indices = rng.permutation(c_indices)
+
+        n_test_c = int(round(n_c * test_size))
+        if n_test_c >= n_c and n_c > 1:
+            n_test_c = n_c - 1
+
+        test_indices.extend(c_indices[:n_test_c].tolist())
+        train_indices.extend(c_indices[n_test_c:].tolist())
+
+    train_indices = np.array(sorted(train_indices), dtype=int)
+    test_indices = np.array(sorted(test_indices), dtype=int)
+
+    return X[train_indices], X[test_indices], y[train_indices], y[test_indices]
