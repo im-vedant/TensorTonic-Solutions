@@ -4,7 +4,7 @@
 
 *   **The Solution:** Dividing by $n-1$ (Bessel's correction) compensates for this bias, providing an "unbiased estimator" that is statistically more accurate for inferring population parameters from limited data.
 
-**In short:** Use `unbiased=True` when you want to make a **statistical inference** about a larger group; use `unbiased=False` when you only care about the **actual data** you currently have in hand.
+**In short:** Use `unbiased=True` when you want to make a **statistical inference** about a larger group; use `unbiased=False` when $x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$  you only care about the **actual data** you currently have in hand.
 
 
 
