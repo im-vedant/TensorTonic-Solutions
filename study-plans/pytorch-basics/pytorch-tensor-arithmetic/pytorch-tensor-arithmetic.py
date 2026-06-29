@@ -4,15 +4,18 @@ def tensor_op(x, y, op):
     """
     Returns: list (result tensor converted via .tolist())
     """
-    x = torch.tensor(x, dtype=torch.float32)
-    y = torch.tensor(y, dtype=torch.float32)
+    t_x = torch.tensor(x, dtype=torch.float32)
+    t_y = torch.tensor(y, dtype=torch.float32)
+
+    res = None
+
     if op == "add":
-        return (x + y).tolist()
+        return torch.add(t_x, t_y).tolist()
     elif op == "multiply":
-        return (x * y).tolist()
+        return torch.mul(t_x, t_y).tolist()
     elif op == "matmul":
-        return (x @ y).tolist()
+        return torch.matmul(t_x, t_y).tolist()
     elif op == "power":
-        return (x ** y).tolist()
+        return torch.pow(t_x, t_y).tolist()
     elif op == "max":
-        return torch.maximum(x, y).tolist()
+        return torch.max(torch.stack([t_x, t_y], dim=0), dim=0).values.tolist()
