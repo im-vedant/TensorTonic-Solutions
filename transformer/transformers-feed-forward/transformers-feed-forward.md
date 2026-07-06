@@ -1,180 +1,407 @@
-# <span style="font-size: 20px;">Position-wise Feed-Forward Network</span>
+## The Missing Piece: Non-Linearity
 
-<span style="font-size: 14px;">The position-wise feed-forward network (FFN) is the other major sublayer in each Transformer block, paired with multi-head self-attention. It consists of two linear transformations with a ReLU activation in between: $\text{FFN}(x) = \max(0,\, xW_1 + b_1)W_2 + b_2$. The FFN is applied to each position independently and identically, acting as a per-token two-layer MLP that expands the representation to a higher dimension, applies a nonlinearity, and contracts back. In Vaswani et al. (2017), the model dimension is $d_{\text{model}} = 512$ and the inner dimension is $d_{ff} = 2048$, giving a 4x expansion ratio.</span>
-
----
-
-## <span style="font-size: 16px;">What It Is</span>
-
-<span style="font-size: 14px;">The position-wise FFN is a two-layer fully connected network applied independently to the representation at each sequence position. "Position-wise" means the same weight matrices $W_1$, $b_1$, $W_2$, $b_2$ are shared across all positions in the sequence, but there is no information flow between positions within this sublayer. Each token's $d_{\text{model}}$-dimensional vector is processed in isolation.</span>
-
-<span style="font-size: 14px;">The architecture is straightforward: the first linear layer projects from $d_{\text{model}}$ to a larger dimension $d_{ff}$, a ReLU activation introduces nonlinearity, and the second linear layer projects back from $d_{ff}$ to $d_{\text{model}}$. This expand-activate-contract pattern gives each token access to a wider computational workspace before compressing the result back to the model's working dimension.</span>
-
-<span style="font-size: 14px;">In the Transformer block, the FFN always follows the multi-head attention sublayer. Both sublayers are wrapped with residual connections and layer normalization: $\text{LayerNorm}(x + \text{Sublayer}(x))$. The FFN receives attention-processed representations and refines them token by token.</span>
-
----
-
-## <span style="font-size: 16px;">Key Equations</span>
-
-### <span style="font-size: 14px;">The FFN Formula</span>
-
-<span style="font-size: 14px;">Given an input vector $x \in \mathbb{R}^{d_{\text{model}}}$ at a single position, the feed-forward network computes:</span>
+Attention is a powerful mechanism, but it has a fundamental limitation: it is **linear in the values**. The attention output for each query is a weighted sum of value vectors:
 
 $$
-\text{FFN}(x) = \max(0,\, xW_1 + b_1)\, W_2 + b_2
+\text{output}_i = \sum_j \alpha_{ij} \mathbf{v}_j
 $$
 
-<span style="font-size: 14px;">Breaking this into its three stages:</span>
+No matter how sophisticated the attention weights $\alpha_{ij}$ are, the output is always a convex combination of the input values. This means attention alone cannot compute non-linear functions of the input.
 
-* <span style="font-size: 14px;">**Expand:** Compute $h = xW_1 + b_1$, where $W_1 \in \mathbb{R}^{d_{\text{model}} \times d_{ff}}$ and $b_1 \in \mathbb{R}^{d_{ff}}$. This projects the input from dimension $d_{\text{model}}$ to $d_{ff}$.</span>
-* <span style="font-size: 14px;">**ReLU:** Compute $a = \max(0, h)$, applying the rectified linear unit element-wise. Every negative component is zeroed out; positive components pass through unchanged.</span>
-* <span style="font-size: 14px;">**Contract:** Compute $\text{FFN}(x) = aW_2 + b_2$, where $W_2 \in \mathbb{R}^{d_{ff} \times d_{\text{model}}}$ and $b_2 \in \mathbb{R}^{d_{\text{model}}}$. This projects back from $d_{ff}$ to $d_{\text{model}}$.</span>
+Consider a simple example: attention cannot compute the product of two input features, or the maximum of two values, or any function that requires non-linear interaction between features. For the Transformer to be a universal function approximator, it needs a non-linear component.
 
-### <span style="font-size: 14px;">Dimensions in the Original Transformer</span>
-
-<span style="font-size: 14px;">Vaswani et al. set $d_{\text{model}} = 512$ and $d_{ff} = 2048$. The parameter count for one FFN sublayer: $W_1$ has $512 \times 2048 = 1{,}048{,}576$ parameters, $b_1$ has $2048$, $W_2$ has $2048 \times 512 = 1{,}048{,}576$ parameters, $b_2$ has $512$. Total: $2{,}099{,}712$ parameters per sublayer. With 6 encoder and 6 decoder layers, the FFN sublayers alone account for roughly $25.2$ million parameters.</span>
-
-### <span style="font-size: 14px;">Batch and Sequence Dimensions</span>
-
-<span style="font-size: 14px;">In practice, the input is a tensor $X \in \mathbb{R}^{B \times T \times d_{\text{model}}}$ where $B$ is the batch size and $T$ is the sequence length. The FFN applies identically across both the $B$ and $T$ dimensions. This is equivalent to reshaping to $(BT) \times d_{\text{model}}$, applying a standard two-layer MLP, and reshaping back.</span>
+The position-wise feed-forward network (FFN) provides this essential non-linearity. Together, attention and FFN form a complete computational unit: attention handles token-to-token interaction, and FFN handles feature-to-feature transformation.
 
 ---
 
-## <span style="font-size: 16px;">Why 4x Expansion</span>
+## The Feed-Forward Network Formula
 
-### <span style="font-size: 14px;">Increased Computational Capacity</span>
-
-<span style="font-size: 14px;">The expansion from $d_{\text{model}}$ to $4 \cdot d_{\text{model}}$ gives the FFN a much richer intermediate space. With 2048 hidden units, the network can represent a far more complex function of the 512-dimensional input. Each hidden unit detects a different linear pattern, and ReLU selectively activates a subset, effectively choosing which features are relevant for each token.</span>
-
-### <span style="font-size: 14px;">Bottleneck Architecture</span>
-
-<span style="font-size: 14px;">The expand-contract design is a bottleneck: the first projection scatters the input into a diverse set of feature detectors, ReLU sparsifies the representation by zeroing out roughly half the dimensions, and the second projection combines the surviving features back into $d_{\text{model}}$ space. This forces the network to learn an efficient encoding rather than simply memorizing the expanded representation.</span>
-
-### <span style="font-size: 14px;">The 4x Ratio Is Empirical</span>
-
-<span style="font-size: 14px;">The ratio $d_{ff} / d_{\text{model}} = 4$ was chosen by Vaswani et al. based on experimental results, not derived from theory. GPT-3 maintains this convention. Models using gated activations like SwiGLU (e.g., LLaMA) typically use $d_{ff} = \frac{8}{3} \cdot d_{\text{model}}$ to keep parameter count similar despite the additional gating projection. The key insight is that the FFN needs a meaningfully larger hidden dimension to provide sufficient capacity, but the exact multiplier is tunable.</span>
-
----
-
-## <span style="font-size: 16px;">Position-Wise Application</span>
-
-### <span style="font-size: 14px;">Same Weights at Every Position</span>
-
-<span style="font-size: 14px;">The FFN uses exactly the same parameters $W_1, b_1, W_2, b_2$ at every sequence position. Position 0 and position 511 are processed by the identical function. Vaswani et al. describe this as equivalent to two $1 \times 1$ convolutions: one with 2048 output channels, then one with 512 output channels. The kernel size of 1 means each position is processed independently, with no spatial receptive field.</span>
-
-### <span style="font-size: 14px;">No Cross-Position Interaction</span>
-
-<span style="font-size: 14px;">Within the FFN sublayer, position $i$ has absolutely no access to positions $j \neq i$. All cross-position communication happens exclusively in the multi-head attention sublayer. This clean separation is a defining architectural choice: attention handles token-to-token interaction (the "mixing" step), and the FFN handles per-token transformation (the "processing" step).</span>
-
-### <span style="font-size: 14px;">Computational Parallelism</span>
-
-<span style="font-size: 14px;">Because positions are independent within the FFN, all $T$ positions can be processed simultaneously as a single batched matrix multiplication. There is no sequential dependency, making the FFN perfectly parallelizable on GPUs. This contrasts with recurrent architectures where each timestep depends on the previous hidden state.</span>
-
----
-
-## <span style="font-size: 16px;">Why ReLU</span>
-
-### <span style="font-size: 14px;">Simplicity and Effectiveness</span>
-
-<span style="font-size: 14px;">ReLU ($\max(0, x)$) is the simplest widely-used nonlinear activation. It has zero computational overhead beyond a comparison, introduces sparsity by zeroing out negative values, and its gradient is trivially 0 or 1. At the time of publication (2017), ReLU was the dominant activation function in deep learning, making it a natural default choice.</span>
-
-### <span style="font-size: 14px;">The Role of Nonlinearity</span>
-
-<span style="font-size: 14px;">Without the ReLU between the two linear layers, the FFN would collapse to a single linear transformation: $(xW_1 + b_1)W_2 + b_2 = x(W_1 W_2) + (b_1 W_2 + b_2)$. This is just $xW + b$, so the two-layer network would have no more expressive power than a single linear layer. ReLU breaks this linearity, enabling the FFN to approximate nonlinear functions. The nonlinearity is what makes the expansion to $d_{ff}$ meaningful.</span>
-
-### <span style="font-size: 14px;">Later Replacements</span>
-
-<span style="font-size: 14px;">Subsequent models replaced ReLU with smoother alternatives. GPT-2 uses GELU (Hendrycks and Gimpel, 2016), which provides a smooth probabilistic gate instead of a hard cutoff at zero. LLaMA and Mistral use SwiGLU (Shazeer, 2020), a gated activation that multiplies two projections element-wise with a SiLU nonlinearity. The FFN structure (expand, activate, contract) remains the same; only the activation function changes.</span>
-
----
-
-## <span style="font-size: 16px;">Paper Context</span>
-
-### <span style="font-size: 14px;">Vaswani et al. (2017)</span>
-
-<span style="font-size: 14px;">In "Attention Is All You Need," Section 3.3 states: "In addition to attention sub-layers, each of the layers in our encoder and decoder contains a fully connected feed-forward network, which is applied to each position separately and identically. This consists of two linear transformations with a ReLU activation in between." The paper specifies $d_{\text{model}} = 512$, $d_{ff} = 2048$ for the base model, and $d_{\text{model}} = 1024$, $d_{ff} = 4096$ for the big model.</span>
-
-### <span style="font-size: 14px;">Analogy to 1x1 Convolutions</span>
-
-<span style="font-size: 14px;">The paper notes that the position-wise FFN "can also be described as two convolutions with kernel size 1." A $1 \times 1$ convolution over a sequence treats each position independently and transforms the channel dimension, exactly like a shared linear layer applied at every position. This connection was intuitive for researchers from the CNN literature, where $1 \times 1$ convolutions (Network-in-Network, Lin et al. 2013) were already well established.</span>
-
-### <span style="font-size: 14px;">Different Parameters Across Layers</span>
-
-<span style="font-size: 14px;">While the FFN shares parameters across positions within a layer, different Transformer layers have different FFN parameters. The paper states: "While the linear transformations are the same across different positions, they use different parameters from layer to layer." Each layer learns a different nonlinear transformation of the per-token representation.</span>
-
----
-
-## <span style="font-size: 16px;">Numerical Example</span>
-
-<span style="font-size: 14px;">Consider a minimal example with $d_{\text{model}} = 4$ and $d_{ff} = 8$ to trace the full computation for a single position.</span>
-
-### <span style="font-size: 14px;">Setup</span>
-
-<span style="font-size: 14px;">Input: $x = [1.0,\; -0.5,\; 0.3,\; 0.8]$ (shape $1 \times 4$). Let $b_1 = \mathbf{0}$ for clarity. After the first linear layer $h = xW_1$:</span>
+The FFN in the original Transformer is a simple two-layer neural network with a ReLU activation:
 
 $$
-h = [2.1,\; -0.7,\; 1.4,\; -1.2,\; 0.0,\; 0.9,\; -0.3,\; 1.8]
+\text{FFN}(x) = \max(0, xW_1 + b_1)W_2 + b_2
 $$
 
-### <span style="font-size: 14px;">Apply ReLU</span>
+Breaking this down:
 
-<span style="font-size: 14px;">$a = \max(0, h)$ element-wise:</span>
+- $x \in \mathbb{R}^{d_{model}}$ is the input vector for one token
+- $W_1 \in \mathbb{R}^{d_{model} \times d_{ff}}$ is the first weight matrix (expansion)
+- $b_1 \in \mathbb{R}^{d_{ff}}$ is the first bias
+- $\max(0, \cdot)$ is the ReLU activation function
+- $W_2 \in \mathbb{R}^{d_{ff} \times d_{model}}$ is the second weight matrix (projection)
+- $b_2 \in \mathbb{R}^{d_{model}}$ is the second bias
 
-$$
-a = [2.1,\; 0.0,\; 1.4,\; 0.0,\; 0.0,\; 0.9,\; 0.0,\; 1.8]
-$$
-
-<span style="font-size: 14px;">Four of eight dimensions survive (indices 0, 2, 5, 7). The other four are zeroed out -- a 50% sparsity rate, typical for ReLU on zero-mean inputs.</span>
-
-### <span style="font-size: 14px;">Contract Back</span>
-
-<span style="font-size: 14px;">Multiply by $W_2$ (shape $8 \times 4$) and add $b_2$. Only the rows of $W_2$ at indices 0, 2, 5, 7 contribute. Suppose the output is:</span>
-
-$$
-\text{FFN}(x) = [0.7,\; -0.2,\; 1.1,\; 0.4]
-$$
-
-### <span style="font-size: 14px;">Residual Connection</span>
-
-<span style="font-size: 14px;">The Transformer adds the residual: $\text{output} = \text{LayerNorm}(x + \text{FFN}(x)) = \text{LayerNorm}([1.7,\; -0.7,\; 1.4,\; 1.2])$. The FFN refines the token's representation while the skip connection preserves the original signal.</span>
-
-### <span style="font-size: 14px;">Key Observations</span>
-
-* <span style="font-size: 14px;">The input was 4-dimensional, expanded to 8-dimensional, then compressed back to 4-dimensional.</span>
-* <span style="font-size: 14px;">ReLU created sparsity, selecting which expanded features survive.</span>
-* <span style="font-size: 14px;">The entire computation was local to one position -- no other token was involved.</span>
-* <span style="font-size: 14px;">The zero entries in $a$ mean only a subset of $W_2$'s rows contributed, making the output a position-dependent linear combination of selected learned features.</span>
+The computation flows through three stages: **expand**, **activate**, **project**.
 
 ---
 
-## <span style="font-size: 16px;">The FFN's Role in the Transformer</span>
+## The Three Stages
 
-### <span style="font-size: 14px;">Attention Mixes, FFN Processes</span>
+**Stage 1: Expand**
 
-<span style="font-size: 14px;">The Transformer block alternates between two fundamentally different operations. Multi-head attention allows every position to gather information from all other positions, producing a context-aware representation. The FFN then applies a nonlinear transformation to each token independently. Attention is about communication between tokens; the FFN is about computation within each token.</span>
+$$
+h = xW_1 + b_1
+$$
 
-### <span style="font-size: 14px;">The FFN as a Key-Value Memory</span>
+The input vector of dimension $d_{model}$ is projected to a higher-dimensional space of dimension $d_{ff}$. In the original Transformer, $d_{ff} = 4 \times d_{model}$, so a 512-dimensional input becomes 2048-dimensional.
 
-<span style="font-size: 14px;">Interpretability research (Geva et al., 2021) has shown that FFN layers function as implicit key-value memories. Each row of $W_1$ acts as a "key" that matches certain input patterns (triggering a high pre-ReLU activation), and the corresponding column of $W_2$ acts as a "value" added to the output when that key matches. ReLU determines which keys are active. This explains why FFNs store factual knowledge: specific $W_1$ rows detect patterns like "the capital of France is" and the corresponding $W_2$ columns push the representation toward "Paris."</span>
+This expansion creates a richer representation with more "room" for complex feature interactions.
 
-### <span style="font-size: 14px;">Parameter Distribution</span>
+**Stage 2: Activate (ReLU)**
 
-<span style="font-size: 14px;">In the base model, the FFN sublayers account for roughly two-thirds of total parameters. Attention has $4 \cdot d_{\text{model}}^2$ parameters per layer (for $Q, K, V$, and output projections), while the FFN has $2 \cdot d_{\text{model}} \cdot d_{ff} = 8 \cdot d_{\text{model}}^2$. The FFN is the larger component, aligning with its role as the primary site for storing learned knowledge.</span>
+$$
+h' = \max(0, h)
+$$
+
+The ReLU activation applies an element-wise non-linearity: positive values pass through unchanged, negative values are set to zero.
+
+This is the critical step that gives the FFN its power. Without this non-linearity, the two linear transformations would collapse into a single linear transformation ($xW_1W_2$), adding no expressiveness.
+
+**Stage 3: Project back**
+
+$$
+\text{output} = h'W_2 + b_2
+$$
+
+The activated hidden representation is projected back to the original dimension $d_{model}$, so the output has the same shape as the input.
 
 ---
 
-## <span style="font-size: 16px;">Pitfalls</span>
+## Why "Position-Wise"?
 
-* <span style="font-size: 14px;">**Placing ReLU after the second linear layer instead of between the two layers.** The correct structure is Linear-ReLU-Linear. If ReLU is applied after $W_2$ instead of after $W_1$, everything up to the activation is a single linear function ($x W_1 W_2$), and the subsequent ReLU merely clips the output. This eliminates the benefit of the expanded hidden dimension.</span>
+The FFN is called "position-wise" because it is applied **independently and identically** to each token position in the sequence:
 
-* <span style="font-size: 14px;">**Using the wrong expansion ratio.** Implementing $d_{ff} = d_{\text{model}}$ (ratio 1) instead of $d_{ff} = 4 \cdot d_{\text{model}}$ dramatically reduces capacity. The standard ratio is 4 for ReLU-based FFNs and $\frac{8}{3}$ for gated variants like SwiGLU. Always check which convention the target architecture uses.</span>
+$$
+\text{FFN}(x_1), \text{FFN}(x_2), \ldots, \text{FFN}(x_n)
+$$
 
-* <span style="font-size: 14px;">**Confusing the FFN with an attention mechanism.** The FFN has no query-key-value structure, no softmax, and no interaction between positions. It is a simple two-layer MLP applied per token. Conflating the two sublayers leads to implementations that accidentally violate position-wise independence.</span>
+There is no information exchange between positions within the FFN. The same weights $W_1, b_1, W_2, b_2$ are shared across all positions, but each token's representation is transformed independently.
 
-* <span style="font-size: 14px;">**Forgetting the bias terms.** The original Transformer FFN includes bias vectors $b_1$ and $b_2$. Some modern architectures (PaLM, LLaMA) remove biases, but Vaswani et al. explicitly includes them. Omitting biases changes the function class, especially for inputs near the origin where $b_1$ shifts the ReLU activation boundary.</span>
+**Why no cross-position interaction?**
 
-* <span style="font-size: 14px;">**Applying the FFN across positions instead of independently per position.** The FFN must treat each position as a separate sample. A common error is reshaping so the sequence dimension gets mixed into the feature dimension. The correct implementation applies linear layers to the last dimension only, broadcasting over batch and sequence.</span>
+This is by design. In the Transformer architecture, the division of labor is clear:
 
-* <span style="font-size: 14px;">**Forgetting the residual connection and layer normalization.** The FFN is always wrapped in a residual: $\text{output} = \text{LayerNorm}(x + \text{FFN}(x))$. Without the skip connection, gradient flow degrades in deep models and training becomes unstable.</span>
+- **Attention** handles cross-position interaction (letting tokens communicate)
+- **FFN** handles within-position transformation (processing each token's features)
+
+By separating these two functions, the architecture is clean and modular. The attention layer determines *what information to gather from other tokens*, and the FFN determines *how to process that information*.
+
+**Equivalence to a $1 \times 1$ convolution:**
+
+In convolutional network terms, the position-wise FFN is equivalent to two $1 \times 1$ convolutions applied to each position. This perspective makes clear that the FFN transforms features at each position without using any spatial (positional) context.
 
 ---
+
+## The Expansion Ratio
+
+The ratio $d_{ff} / d_{model}$ is typically 4 in the original Transformer:
+
+- $d_{model} = 512 \rightarrow d_{ff} = 2048$
+- $d_{model} = 768 \rightarrow d_{ff} = 3072$ (BERT-Base)
+- $d_{model} = 1024 \rightarrow d_{ff} = 4096$ (Transformer Big)
+
+**Why expand to 4x?**
+
+The expansion creates a wider hidden layer that can represent more complex functions:
+
+- With $d_{ff} = d_{model}$ (no expansion), the FFN is a bottleneck: it cannot represent functions more complex than a single linear transformation with non-linearity
+- With $d_{ff} = 4 \times d_{model}$, the network has four times as many neurons in the hidden layer, enabling it to learn richer feature transformations
+
+**The expand-then-compress pattern** is common across deep learning:
+
+- In ResNets, the bottleneck block expands to $4 \times$ channels and compresses back
+- In MobileNets, inverted residuals expand to $6 \times$ and compress back
+- The principle is the same: expand into a high-dimensional space where complex transformations are easier, then compress back to the working dimension
+
+**Why not expand more?**
+
+Increasing $d_{ff}$ increases both parameters and computation. The FFN is already the most parameter-heavy component of a Transformer layer:
+
+$$
+\text{FFN parameters} = d_{model} \times d_{ff} + d_{ff} + d_{ff} \times d_{model} + d_{model} \approx 2 \times d_{model} \times d_{ff}
+$$
+
+For the original Transformer: $2 \times 512 \times 2048 \approx 2.1$ million parameters per FFN. With 6 encoder layers, that is 12.6 million parameters just for the FFN layers.
+
+---
+
+## Worked Example
+
+Consider $d_{model} = 3$ and $d_{ff} = 6$.
+
+**Input:** $x = [1.0, -0.5, 2.0]$
+
+**Weights (simplified):**
+
+$$
+W_1 = \begin{pmatrix} 0.5 & -0.3 & 0.1 & 0.8 & -0.2 & 0.4 \\ 0.2 & 0.6 & -0.4 & 0.1 & 0.3 & -0.5 \\ -0.1 & 0.4 & 0.7 & -0.3 & 0.5 & 0.2 \end{pmatrix}
+$$
+
+$b_1 = [0.1, 0, 0, 0, 0, 0]$
+
+**Step 1: Linear projection** ($xW_1 + b_1$)
+
+$$
+h = [1.0, -0.5, 2.0] \cdot W_1 + b_1
+$$
+
+Computing each element:
+
+- $h_1 = 1.0(0.5) + (-0.5)(0.2) + 2.0(-0.1) + 0.1 = 0.5 - 0.1 - 0.2 + 0.1 = 0.3$
+- $h_2 = 1.0(-0.3) + (-0.5)(0.6) + 2.0(0.4) + 0 = -0.3 - 0.3 + 0.8 = 0.2$
+- $h_3 = 1.0(0.1) + (-0.5)(-0.4) + 2.0(0.7) + 0 = 0.1 + 0.2 + 1.4 = 1.7$
+- $h_4 = 1.0(0.8) + (-0.5)(0.1) + 2.0(-0.3) + 0 = 0.8 - 0.05 - 0.6 = 0.15$
+- $h_5 = 1.0(-0.2) + (-0.5)(0.3) + 2.0(0.5) + 0 = -0.2 - 0.15 + 1.0 = 0.65$
+- $h_6 = 1.0(0.4) + (-0.5)(-0.5) + 2.0(0.2) + 0 = 0.4 + 0.25 + 0.4 = 1.05$
+
+$h = [0.3, 0.2, 1.7, 0.15, 0.65, 1.05]$
+
+**Step 2: ReLU**
+
+$$
+h' = \max(0, h) = [0.3, 0.2, 1.7, 0.15, 0.65, 1.05]
+$$
+
+All values are positive, so ReLU does not change anything in this example. If any were negative, they would become zero.
+
+**Step 3: Project back**
+
+Multiply by $W_2$ (shape $6 \times 3$) and add $b_2$ to get back to dimension 3.
+
+The output has the same shape as the input: $[y_1, y_2, y_3]$, a 3-dimensional vector ready for the next layer.
+
+---
+
+## ReLU: The Activation Function
+
+The original Transformer uses ReLU (Rectified Linear Unit):
+
+$$
+\text{ReLU}(x) = \max(0, x)
+$$
+
+**Properties:**
+
+- Passes positive values through unchanged
+- Sets negative values to zero
+- Introduces sparsity: on average, about half the neurons are zero (inactive)
+- Computationally cheap: just a comparison and a zero-assignment
+- Gradient is either 0 (for negative inputs) or 1 (for positive inputs)
+
+**The sparsity perspective:**
+
+ReLU creates a sparse hidden representation: many of the $d_{ff}$ hidden units are zero for any given input. This sparsity means that different inputs activate different subsets of neurons, effectively partitioning the network's capacity across different input patterns.
+
+This has been connected to the idea that **FFN layers function as key-value memories**, where each neuron acts as a "key" that activates for specific input patterns and retrieves a corresponding "value" (the corresponding column of $W_2$).
+
+---
+
+## Modern Activation Variants
+
+While the original Transformer uses ReLU, modern Transformers have adopted smoother alternatives:
+
+**GELU (Gaussian Error Linear Unit):**
+
+$$
+\text{GELU}(x) = x \cdot \Phi(x)
+$$
+
+where $\Phi(x)$ is the standard Gaussian cumulative distribution function.
+
+- Used in BERT, GPT-2, GPT-3
+- Smoother than ReLU: instead of a hard cutoff at zero, GELU smoothly transitions from passing to blocking values
+- Approximately: $\text{GELU}(x) \approx 0.5x\left(1 + \tanh\left[\sqrt{2/\pi}(x + 0.044715x^3)\right]\right)$
+
+**SwiGLU (Swish-Gated Linear Unit):**
+
+$$
+\text{SwiGLU}(x) = \text{Swish}(xW_1) \odot (xW_3)
+$$
+
+where $\text{Swish}(x) = x \cdot \sigma(x)$ and $\odot$ is element-wise multiplication.
+
+- Used in LLaMA, PaLM, Mistral
+- Introduces a gating mechanism: one linear projection controls the gate, another provides the content
+- Requires a third weight matrix $W_3$, but empirically outperforms ReLU and GELU
+- When using SwiGLU, $d_{ff}$ is typically adjusted to $\frac{8}{3} d_{model}$ to keep the parameter count similar
+
+**Why the evolution?**
+
+Research has shown that smoother activations (GELU) and gated activations (SwiGLU) produce better training dynamics and final model quality. The hard zero cutoff in ReLU creates "dead neurons" that never activate and cannot learn, while smoother activations allow small gradients even for near-zero inputs.
+
+---
+
+## FFN as Knowledge Storage
+
+A fascinating finding from interpretability research is that FFN layers in trained Transformers appear to store **factual knowledge**.
+
+**The key-value memory interpretation:**
+
+Each neuron in the hidden layer can be viewed as a pattern detector:
+
+- The row of $W_1$ corresponding to that neuron defines a "key" pattern
+- The column of $W_2$ corresponding to that neuron defines a "value" pattern
+- When the input matches the key (high dot product), the neuron activates and adds its value to the output
+
+For example, a specific neuron might activate whenever the input represents "the capital of France" and contribute a value that pushes the output toward "Paris."
+
+**Evidence:**
+
+- Knocking out specific neurons in FFN layers can delete specific facts from the model's knowledge
+- Editing specific neurons can change what the model "knows" (e.g., changing the capital of a country)
+- The FFN parameters account for about two-thirds of a Transformer's total parameters, consistent with the idea that most of the model's "knowledge" is stored here
+
+This interpretation highlights the complementary roles of attention and FFN: attention routes information between tokens (computation), while FFN stores and retrieves information (memory).
+
+---
+
+## Division of Labor: Attention vs. FFN
+
+The alternating pattern of attention and FFN layers creates a powerful computational architecture:
+
+**Attention layer:**
+
+- Mixes information across positions
+- Each token gathers relevant information from other tokens
+- Output: contextually enriched representations
+- Linear in values (no non-linear feature transformation)
+
+**FFN layer:**
+
+- Transforms features at each position independently
+- Adds non-linear capacity
+- Refines the contextual representations produced by attention
+- Output: transformed representations ready for the next attention layer
+
+**The iteration:**
+
+Each encoder block applies attention then FFN. By stacking multiple blocks, the model iteratively:
+
+1. Gathers information from context (attention)
+2. Processes that information (FFN)
+3. Gathers more information, now based on the processed representations (next attention)
+4. Processes again (next FFN)
+
+This iterative refinement is what allows deep Transformers to compute increasingly complex functions of the input.
+
+---
+
+## Dimensional Analysis
+
+Tracking shapes through the FFN:
+
+**Input:** $(B, L, d_{model})$
+
+- $B$ = batch size
+- $L$ = sequence length
+- $d_{model}$ = model dimension
+
+**After first linear:** $(B, L, d_{ff})$
+
+- Expanded by factor of 4 in the last dimension
+- $d_{ff} = 4 \times d_{model}$ typically
+
+**After ReLU:** $(B, L, d_{ff})$
+
+- Same shape, but approximately half the values are zero
+
+**After second linear:** $(B, L, d_{model})$
+
+- Back to the original dimension
+
+**Key property:** The output has exactly the same shape as the input. This is necessary because the output must be compatible with the residual connection: $x + \text{FFN}(x)$.
+
+---
+
+## Parameter Count and Dominance
+
+The FFN is the most parameter-heavy component in a Transformer layer:
+
+**FFN parameters:**
+
+- $W_1$: $d_{model} \times d_{ff}$ parameters
+- $b_1$: $d_{ff}$ parameters
+- $W_2$: $d_{ff} \times d_{model}$ parameters
+- $b_2$: $d_{model}$ parameters
+- Total: $\approx 2 \times d_{model} \times d_{ff} = 8 \times d_{model}^2$ (with $d_{ff} = 4d_{model}$)
+
+**Attention parameters:**
+
+- $W^Q, W^K, W^V, W^O$: $4 \times d_{model}^2$ parameters
+
+**Ratio:**
+
+$$
+\frac{\text{FFN params}}{\text{Attention params}} = \frac{8 \times d_{model}^2}{4 \times d_{model}^2} = 2
+$$
+
+The FFN has roughly **twice as many parameters** as the attention layer. In a full Transformer, about two-thirds of the parameters are in FFN layers and one-third in attention layers.
+
+This parameter distribution aligns with the knowledge storage interpretation: the model needs more capacity for storing knowledge (FFN) than for routing information (attention).
+
+---
+
+## Dropout in the FFN
+
+The original Transformer applies dropout within the FFN for regularization:
+
+$$
+\text{FFN}(x) = \text{Dropout}(\max(0, xW_1 + b_1))W_2 + b_2
+$$
+
+Dropout randomly sets a fraction of the hidden activations to zero during training:
+
+- Prevents co-adaptation of neurons (different neurons must learn independently useful features)
+- Acts as a form of ensemble averaging (each training step uses a different random subset of neurons)
+- Typical rate: 0.1 (10% of neurons zeroed out)
+- Disabled during inference
+
+---
+
+## Computational Cost
+
+**FLOPs per token:**
+
+The FFN requires two matrix multiplications:
+
+- $xW_1$: $d_{model} \times d_{ff}$ multiply-adds
+- $h'W_2$: $d_{ff} \times d_{model}$ multiply-adds
+- Total: $2 \times d_{model} \times d_{ff}$ FLOPs per token
+
+For the original Transformer: $2 \times 512 \times 2048 = 2{,}097{,}152$ FLOPs per token per layer.
+
+**Comparison to attention:**
+
+Self-attention requires $O(L^2 \times d_{model})$ FLOPs, where $L$ is the sequence length. For short sequences ($L < d_{ff}$), the FFN dominates computation. For long sequences ($L > d_{ff}$), attention dominates.
+
+In the original Transformer with $L = 512$ and $d_{ff} = 2048$: attention and FFN have roughly comparable cost. In modern long-context models with $L = 8192+$, attention becomes the bottleneck.
+
+---
+
+## Mixture of Experts: Scaling the FFN
+
+A major recent development is the **Mixture of Experts (MoE)** approach, which scales the FFN capacity without proportionally increasing computation.
+
+**The idea:**
+
+Instead of one FFN, have $E$ expert FFNs. For each token, a learned router selects the top $k$ experts (typically $k = 1$ or $k = 2$):
+
+$$
+\text{MoE-FFN}(x) = \sum_{i \in \text{TopK}} g_i(x) \cdot \text{FFN}_i(x)
+$$
+
+where $g_i(x)$ is the gating weight for expert $i$.
+
+**Benefits:**
+
+- Total parameters scale with $E$ (more knowledge storage)
+- Computation per token scales with $k$ (remains manageable)
+- Allows models with trillions of parameters that are still fast to run
+
+**Examples:**
+
+- Switch Transformer: $E = 128$ experts, $k = 1$ (routes each token to exactly one expert)
+- GShard: $E = 2048$ experts across multiple devices
+- Mixtral: $E = 8$ experts, $k = 2$ (each token uses 2 of 8 experts)
+
+The MoE approach fundamentally treats the FFN as a knowledge storage system and scales it by adding more "memory banks" (experts) while keeping the computational cost per token constant.
