@@ -1,210 +1,398 @@
-# <span style="font-size: 20px;">Layer Normalization</span>
+## The Problem: Internal Covariate Shift
 
-<span style="font-size: 14px;">Layer Normalization (Ba et al., 2016) normalizes activations across the feature dimension for each individual sample, stabilizing training by controlling the distribution of inputs to each layer. In the original Transformer (Vaswani et al., 2017), it appears after every residual connection, making it one of the most frequently executed operations in the architecture.</span>
+Deep neural networks consist of many layers stacked on top of each other. Each layer receives input from the layer below and produces output for the layer above. As training progresses and weights update, the distribution of inputs to each layer changes constantly. This phenomenon is called **internal covariate shift**.
 
----
+The problem is practical: if the inputs to a layer suddenly shift in scale or center, the layer's weights, which were tuned for the old distribution, become suboptimal. The network must constantly readjust, slowing down training.
 
-## <span style="font-size: 16px;">What It Is</span>
+**Example of the problem:**
 
-<span style="font-size: 14px;">Layer Normalization takes a single input vector and transforms it to have zero mean and unit variance across the feature dimension, then applies a learned affine transformation (scale and shift). It operates on each sample independently, with no dependence on other samples in the batch.</span>
+Suppose a layer receives inputs that initially have mean 0 and standard deviation 1. After a weight update in an earlier layer, the inputs might shift to mean 5 and standard deviation 10. The current layer's weights, which were calibrated for the original distribution, will now produce wildly different outputs, potentially causing instability.
 
-<span style="font-size: 14px;">In the Transformer, Layer Normalization appears inside every encoder and decoder block. Each block contains two sub-layers (self-attention and feed-forward network), and each sub-layer is wrapped with a residual connection followed by Layer Normalization. For a 6-layer encoder with 2 sub-layers per layer, that is 12 LayerNorm operations. The decoder adds a third sub-layer (cross-attention) per block, bringing the total to 18 across 6 decoder layers, plus 12 in the encoder: 30 LayerNorm calls per forward pass in the full Transformer.</span>
-
----
-
-## <span style="font-size: 16px;">Key Equations</span>
-
-<span style="font-size: 14px;">Given an input vector $x \in \mathbb{R}^d$ (one token's hidden state, where $d = d_{\text{model}}$):</span>
-
-<span style="font-size: 14px;">**Step 1: Compute the mean** across all $d$ features:</span>
-
-$$
-\mu = \frac{1}{d} \sum_{i=1}^{d} x_i
-$$
-
-<span style="font-size: 14px;">**Step 2: Compute the variance** across all $d$ features:</span>
-
-$$
-\sigma^2 = \frac{1}{d} \sum_{i=1}^{d} (x_i - \mu)^2
-$$
-
-<span style="font-size: 14px;">**Step 3: Normalize** each element to zero mean and unit variance:</span>
-
-$$
-\hat{x}_i = \frac{x_i - \mu}{\sqrt{\sigma^2 + \epsilon}}
-$$
-
-<span style="font-size: 14px;">where $\epsilon$ is a small constant (typically $10^{-5}$) for numerical stability.</span>
-
-<span style="font-size: 14px;">**Step 4: Scale and shift** using learned parameters:</span>
-
-$$
-\text{LayerNorm}(x) = \gamma \odot \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} + \beta
-$$
-
-<span style="font-size: 14px;">where:</span>
-
-* <span style="font-size: 14px;">$x \in \mathbb{R}^d$: input activation vector. In the original Transformer, $d = d_{\text{model}} = 512$.</span>
-* <span style="font-size: 14px;">$\mu$: scalar mean of $x$ across the feature dimension. Computed independently per token.</span>
-* <span style="font-size: 14px;">$\sigma^2$: scalar variance of $x$ across the feature dimension. Computed independently per token.</span>
-* <span style="font-size: 14px;">$\epsilon$: small constant for numerical stability. Standard value is $10^{-5}$.</span>
-* <span style="font-size: 14px;">$\gamma \in \mathbb{R}^d$: learnable scale parameter, initialized to ones.</span>
-* <span style="font-size: 14px;">$\beta \in \mathbb{R}^d$: learnable shift parameter, initialized to zeros.</span>
-* <span style="font-size: 14px;">$\odot$: element-wise (Hadamard) multiplication.</span>
+Normalization techniques address this by standardizing inputs to have a consistent distribution before each layer processes them.
 
 ---
 
-## <span style="font-size: 16px;">Post-Norm in the Original Transformer</span>
+## What Layer Normalization Does
 
-<span style="font-size: 14px;">The original Transformer paper (Vaswani et al., 2017) uses what is now called the **post-norm** architecture. The paper states: "We employ a residual connection around each of the two sub-layers, followed by layer normalization." The computation for each sub-layer is:</span>
+Layer normalization transforms the activations across the **feature dimension** so that, for each individual sample and each individual position, the features have zero mean and unit variance:
+
+$$
+\text{LayerNorm}(x) = \gamma \cdot \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} + \beta
+$$
+
+where:
+
+- $x \in \mathbb{R}^{d_{model}}$ is the input vector for one token at one position
+- $\mu$ is the mean of all $d_{model}$ components of $x$
+- $\sigma^2$ is the variance of all $d_{model}$ components of $x$
+- $\gamma \in \mathbb{R}^{d_{model}}$ is a learned scale parameter (initialized to 1)
+- $\beta \in \mathbb{R}^{d_{model}}$ is a learned shift parameter (initialized to 0)
+- $\epsilon$ is a small constant for numerical stability (typically $10^{-6}$)
+
+---
+
+## Computing Mean and Variance
+
+For a single input vector $x = [x_1, x_2, \ldots, x_d]$ where $d = d_{model}$:
+
+**Mean:**
+
+$$
+\mu = \frac{1}{d} \sum_{j=1}^{d} x_j
+$$
+
+**Variance:**
+
+$$
+\sigma^2 = \frac{1}{d} \sum_{j=1}^{d} (x_j - \mu)^2
+$$
+
+**Normalization:**
+
+$$
+\hat{x}_j = \frac{x_j - \mu}{\sqrt{\sigma^2 + \epsilon}} \quad \text{for each } j = 1, \ldots, d
+$$
+
+After normalization, the $\hat{x}$ vector has approximately zero mean and unit variance across its components.
+
+The crucial point is that normalization happens across the **feature dimension** (across the $d_{model}$ components), not across the batch or across sequence positions. Each token is normalized independently.
+
+---
+
+## Worked Example
+
+Consider a vector $x = [2, 4, 6, 8]$ with $d_{model} = 4$, $\gamma = [1, 1, 1, 1]$, $\beta = [0, 0, 0, 0]$, $\epsilon = 10^{-6}$.
+
+**Step 1: Compute mean**
+
+$$
+\mu = \frac{2 + 4 + 6 + 8}{4} = \frac{20}{4} = 5
+$$
+
+**Step 2: Compute variance**
+
+$$
+\sigma^2 = \frac{(2-5)^2 + (4-5)^2 + (6-5)^2 + (8-5)^2}{4} = \frac{9 + 1 + 1 + 9}{4} = \frac{20}{4} = 5
+$$
+
+**Step 3: Normalize**
+
+$$
+\hat{x}_1 = \frac{2 - 5}{\sqrt{5 + 10^{-6}}} = \frac{-3}{2.236} \approx -1.342
+$$
+
+$$
+\hat{x}_2 = \frac{4 - 5}{\sqrt{5}} = \frac{-1}{2.236} \approx -0.447
+$$
+
+$$
+\hat{x}_3 = \frac{6 - 5}{\sqrt{5}} = \frac{1}{2.236} \approx 0.447
+$$
+
+$$
+\hat{x}_4 = \frac{8 - 5}{\sqrt{5}} = \frac{3}{2.236} \approx 1.342
+$$
+
+**Result:** $[-1.342, -0.447, 0.447, 1.342]$
+
+**Verification:**
+- Mean: $(-1.342 - 0.447 + 0.447 + 1.342)/4 = 0$ (zero mean)
+- Variance: approximately 1 (unit variance)
+
+---
+
+## Why Learnable $\gamma$ and $\beta$?
+
+After normalization, all vectors have mean 0 and variance 1. But this might not be the best representation for every layer. What if the optimal input distribution for a downstream layer actually has mean 2 and variance 3?
+
+The learnable parameters $\gamma$ and $\beta$ allow the network to undo the normalization if that is beneficial:
+
+$$
+y_j = \gamma_j \hat{x}_j + \beta_j
+$$
+
+- $\gamma_j$ controls the scale of dimension $j$
+- $\beta_j$ controls the shift of dimension $j$
+- These are learned per-dimension, giving $2 \times d_{model}$ additional parameters
+
+**At initialization** ($\gamma = \mathbf{1}$, $\beta = \mathbf{0}$), the affine transform is the identity, so LayerNorm simply normalizes. During training, the model learns the optimal scale and shift for each dimension.
+
+**The identity escape hatch:**
+
+If the optimal behavior is no normalization at all, the model can learn $\gamma_j = \sigma_j$ and $\beta_j = \mu_j$ (the original statistics), effectively undoing the normalization entirely. This means LayerNorm can never make the model worse than not having it; it only adds flexibility.
+
+---
+
+## Layer Normalization vs. Batch Normalization
+
+The most important distinction in normalization techniques is **which dimension** the statistics are computed over.
+
+**Batch Normalization (BatchNorm):**
+
+Normalizes across the **batch dimension**. For each feature, compute the mean and variance across all samples in the batch.
+
+$$
+\mu_j^{BN} = \frac{1}{B} \sum_{b=1}^{B} x_{bj}, \quad \sigma_j^{2, BN} = \frac{1}{B} \sum_{b=1}^{B} (x_{bj} - \mu_j^{BN})^2
+$$
+
+- Statistics computed across the batch for each feature independently
+- Each feature gets its own mean and variance
+- Requires a sufficiently large batch for stable statistics
+- During inference, uses running averages computed during training
+
+**Layer Normalization (LayerNorm):**
+
+Normalizes across the **feature dimension**. For each sample, compute the mean and variance across all features.
+
+$$
+\mu^{LN} = \frac{1}{d} \sum_{j=1}^{d} x_j, \quad \sigma^{2, LN} = \frac{1}{d} \sum_{j=1}^{d} (x_j - \mu^{LN})^2
+$$
+
+- Statistics computed across features for each sample independently
+- Each sample gets its own mean and variance
+- No dependence on batch size
+- Identical behavior during training and inference
+
+---
+
+## Why LayerNorm for Transformers?
+
+BatchNorm was the dominant normalization technique when the Transformer was introduced (2017), having proven transformative for convolutional neural networks. So why did the Transformer choose LayerNorm instead?
+
+**Variable sequence lengths:**
+
+In NLP, sequences within a batch often have different lengths, padded to the maximum length. BatchNorm would compute statistics that mix real tokens with padding tokens, introducing noise. LayerNorm normalizes each token independently, so padding is irrelevant.
+
+**Batch size independence:**
+
+LayerNorm produces the same output regardless of batch size. This is important because:
+
+- Inference often uses batch size 1 (single query)
+- BatchNorm at batch size 1 has undefined statistics (a single sample has no variance across the batch)
+- LayerNorm works identically during training and inference
+
+**Autoregressive generation:**
+
+During text generation, the model produces one token at a time. There is no "batch" of tokens to compute statistics over at each step. LayerNorm handles this naturally because it only needs the features of the current token.
+
+**Parallel across positions:**
+
+Each token position is normalized independently, which aligns with the Transformer's parallel processing of positions. BatchNorm would introduce dependencies between positions within the batch.
+
+---
+
+## The Epsilon ($\epsilon$) Parameter
+
+The small constant $\epsilon$ added inside the square root prevents division by zero:
+
+$$
+\frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}}
+$$
+
+**When is $\epsilon$ needed?**
+
+If all components of $x$ are identical (e.g., $x = [3, 3, 3, 3]$), then $\sigma^2 = 0$. Without $\epsilon$, we would divide by zero, producing NaN values that propagate through the network and destroy training.
+
+**What value to use?**
+
+- $\epsilon = 10^{-6}$ is the most common choice (used in the original Transformer)
+- $\epsilon = 10^{-5}$ is used in some implementations (e.g., BERT)
+- The exact value rarely matters as long as it is small enough not to distort the normalization but large enough to prevent numerical issues
+
+**Gradient implications:**
+
+Even when $\sigma^2$ is not exactly zero, very small variances produce very large normalized values (because we divide by a very small number). The $\epsilon$ provides a floor that prevents extreme values and keeps gradients stable.
+
+---
+
+## Pre-Norm vs. Post-Norm
+
+The Transformer uses LayerNorm in a specific pattern called "post-norm":
+
+**Post-Norm (original Transformer):**
 
 $$
 \text{output} = \text{LayerNorm}(x + \text{Sublayer}(x))
 $$
 
-<span style="font-size: 14px;">Here, $x$ is the input to the sub-layer, $\text{Sublayer}(x)$ is the output of either the self-attention or the feed-forward network, and LayerNorm is applied to the sum. The term "post-norm" refers to the fact that normalization happens after the residual addition.</span>
+LayerNorm is applied **after** the residual addition.
 
-<span style="font-size: 14px;">The residual branch and the skip connection are added first, producing a potentially large and unnormalized sum, and then LayerNorm brings the combined result back to a controlled distribution. In the encoder block, the full computation is:</span>
-
-$$
-h = \text{LayerNorm}(x + \text{MultiHeadAttention}(x, x, x))
-$$
+**Pre-Norm (GPT-2, GPT-3, LLaMA, and most modern Transformers):**
 
 $$
-\text{out} = \text{LayerNorm}(h + \text{FFN}(h))
+\text{output} = x + \text{Sublayer}(\text{LayerNorm}(x))
 $$
 
-<span style="font-size: 14px;">Each sub-layer gets its own LayerNorm with its own $\gamma$ and $\beta$ parameters. The two LayerNorm instances do not share parameters.</span>
+LayerNorm is applied **before** the sublayer, and the residual connection bypasses the normalization.
+
+**Why pre-norm became dominant:**
+
+- **Gradient flow**: In pre-norm, the residual connection creates a clean skip path from the input to the output. Gradients can flow through this path without passing through LayerNorm, which can dampen gradients.
+- **Training stability**: Pre-norm models are significantly easier to train, especially for deep models (50+ layers). Post-norm models often require careful learning rate warmup to avoid divergence.
+- **Depth scaling**: Pre-norm allows successful training of models with hundreds of layers, while post-norm struggles beyond a few dozen without careful tuning.
+
+The original Transformer paper used post-norm, but the field has largely moved to pre-norm due to its superior training dynamics.
 
 ---
 
-## <span style="font-size: 16px;">Why Normalize</span>
+## Where LayerNorm Appears in the Transformer
 
-<span style="font-size: 14px;">During training, the distribution of inputs to each layer shifts as the parameters of all preceding layers update. This phenomenon, described as **internal covariate shift** (Ioffe and Szegedy, 2015), forces each layer to continuously adapt to a moving target. Normalization fixes the input distribution to zero mean and unit variance, removing this moving target and stabilizing the optimization landscape.</span>
+In the original (post-norm) Transformer encoder, LayerNorm appears twice per block:
 
-<span style="font-size: 14px;">Normalization enables higher learning rates because the gradients are better conditioned. Without normalization, the loss surface has sharp valleys where a slightly too-large learning rate causes divergence. With normalization, the surface is smoother, tolerating larger steps. Training without LayerNorm at all is extremely difficult for deep Transformers, even with learning rate warmup.</span>
+**After self-attention:**
 
-<span style="font-size: 14px;">Normalization also improves gradient flow. In a post-norm architecture, the gradient passes through LayerNorm at every layer. Each LayerNorm rescales the gradient to a controlled magnitude, preventing both vanishing and exploding gradients. This is why Transformers can be stacked to 6, 12, or even 96 layers while remaining trainable.</span>
+$$
+x_1 = \text{LayerNorm}(x + \text{MultiHeadAttention}(x, x, x))
+$$
+
+**After the feed-forward network:**
+
+$$
+x_2 = \text{LayerNorm}(x_1 + \text{FFN}(x_1))
+$$
+
+Each LayerNorm has its own learnable $\gamma$ and $\beta$ parameters, so the two normalizations can learn different scales and shifts optimized for their respective positions in the architecture.
+
+With $N$ encoder blocks, there are $2N$ LayerNorm operations in the encoder alone.
 
 ---
 
-## <span style="font-size: 16px;">The Learnable Parameters</span>
+## Gradient Flow Through LayerNorm
 
-<span style="font-size: 14px;">Layer Normalization has two learnable parameter vectors: $\gamma \in \mathbb{R}^d$ (scale) and $\beta \in \mathbb{R}^d$ (shift). Together, they form an affine transformation applied element-wise to the normalized output.</span>
+Understanding how gradients flow through LayerNorm reveals why it stabilizes training.
 
-<span style="font-size: 14px;">$\gamma$ is initialized to all ones and $\beta$ is initialized to all zeros. At initialization, LayerNorm acts as pure normalization. During training, the network adjusts $\gamma$ and $\beta$ through backpropagation to learn the optimal distribution for each feature dimension.</span>
+**Forward pass:**
 
-<span style="font-size: 14px;">These parameters exist because raw normalization is too restrictive. Forcing all hidden states to zero mean and unit variance constrains representational capacity. If the network learns $\gamma_i = \sigma$ and $\beta_i = \mu$ for the original pre-normalization statistics, it recovers the unnormalized activation exactly, so LayerNorm never reduces model capacity.</span>
+$$
+\hat{x}_j = \frac{x_j - \mu}{\sqrt{\sigma^2 + \epsilon}}
+$$
 
-<span style="font-size: 14px;">For the original Transformer with $d_{\text{model}} = 512$, each LayerNorm instance has $2 \times 512 = 1{,}024$ parameters. With 30 LayerNorm instances across the full encoder-decoder, that is $30{,}720$ learnable parameters total, tiny compared to attention and FFN weights but critical for model quality.</span>
+**Backward pass (simplified):**
+
+The Jacobian of LayerNorm is:
+
+$$
+\frac{\partial \hat{x}_j}{\partial x_k} = \frac{1}{\sqrt{\sigma^2 + \epsilon}} \left(\delta_{jk} - \frac{1}{d} - \frac{\hat{x}_j \hat{x}_k}{d}\right)
+$$
+
+where $\delta_{jk}$ is the Kronecker delta (1 if $j = k$, 0 otherwise).
+
+**Key insight:**
+
+The gradient has three components:
+
+- $\delta_{jk}$: the direct gradient (same as without normalization)
+- $-1/d$: a correction that distributes gradient equally across all dimensions (from the mean subtraction)
+- $-\hat{x}_j \hat{x}_k / d$: a correction that accounts for the variance normalization
+
+The $1/\sqrt{\sigma^2 + \epsilon}$ scaling factor ensures that even if the input scale varies wildly, the gradients remain in a manageable range. This is the core mechanism by which LayerNorm stabilizes training.
 
 ---
 
-## <span style="font-size: 16px;">LayerNorm vs BatchNorm</span>
+## RMSNorm: A Simplification
 
-<span style="font-size: 14px;">Batch Normalization (Ioffe and Szegedy, 2015) was the dominant normalization before LayerNorm. The fundamental difference is the normalization dimension:</span>
+RMSNorm (Root Mean Square Layer Normalization) is a simplified variant that has gained popularity in modern architectures like LLaMA:
 
-* <span style="font-size: 14px;">**Batch Normalization** computes mean and variance across the batch dimension: for each feature, aggregate statistics over all samples in the mini-batch.</span>
-* <span style="font-size: 14px;">**Layer Normalization** computes mean and variance across the feature dimension: for each sample, aggregate statistics over all features.</span>
+$$
+\text{RMSNorm}(x) = \gamma \cdot \frac{x}{\text{RMS}(x)}
+$$
 
-<span style="font-size: 14px;">For Transformers, LayerNorm is strongly preferred:</span>
+where:
 
-* <span style="font-size: 14px;">**No batch dependence.** BatchNorm introduces a dependency between samples. LayerNorm computes everything per-sample, so each token is normalized independently.</span>
-* <span style="font-size: 14px;">**Variable sequence lengths.** BatchNorm at position $t$ averages across all sequences that reach position $t$, creating inconsistent statistics. LayerNorm normalizes each token by its own features, unaffected by sequence length.</span>
-* <span style="font-size: 14px;">**Train-test consistency.** BatchNorm maintains running statistics during training and uses them at inference, creating a gap. LayerNorm has no running statistics and behaves identically at train and test time.</span>
-* <span style="font-size: 14px;">**Small batch sizes.** BatchNorm with batch size 1 produces degenerate statistics (variance is 0). LayerNorm works perfectly with any batch size, including single-sample inference.</span>
+$$
+\text{RMS}(x) = \sqrt{\frac{1}{d} \sum_{j=1}^{d} x_j^2}
+$$
+
+**Differences from LayerNorm:**
+
+- No mean subtraction (does not re-center to zero mean)
+- No $\beta$ parameter (only scale, no shift)
+- Slightly simpler computation (no mean calculation)
+
+**Why it works:**
+
+Research has shown that the re-centering (mean subtraction) in LayerNorm is often not the critical component. The re-scaling (division by standard deviation) is what primarily stabilizes training. RMSNorm keeps only the re-scaling, reducing computational cost by about 10-15%.
 
 ---
 
-## <span style="font-size: 16px;">Paper Context</span>
+## Normalization Across the Feature Dimension: The Geometric View
 
-<span style="font-size: 14px;">The Transformer paper (Vaswani et al., 2017) adopts Layer Normalization from Ba, Kiros, and Hinton (2016), who proposed it as a batch-independent alternative to Batch Normalization. The paper does not devote much discussion to the choice, treating it as a known technique. The relevant passage states: "We employ a residual connection around each of the two sub-layers, followed by layer normalization. That is, the output of each sub-layer is $\text{LayerNorm}(x + \text{Sublayer}(x))$, where $\text{Sublayer}(x)$ is the function implemented by the sub-layer itself."</span>
+Geometrically, LayerNorm projects the input vector onto a hypersphere of radius $\sqrt{d}$ centered at the origin (after accounting for $\gamma$ and $\beta$).
 
-<span style="font-size: 14px;">The paper uses dropout with rate 0.1 applied to sub-layer outputs before the residual addition, meaning the actual computation is $\text{LayerNorm}(x + \text{Dropout}(\text{Sublayer}(x)))$. The combination of residual connections and LayerNorm follows a pattern established by He et al. (2016) in ResNets. Without LayerNorm, stacking 6 encoder and 6 decoder layers would be difficult to train, as residual additions would accumulate and activation magnitudes would grow without bound.</span>
+**Before normalization:**
 
----
+Input vectors can point anywhere in $\mathbb{R}^d$ with arbitrary magnitude. Two vectors with the same direction but different magnitudes ($[1, 2, 3]$ and $[100, 200, 300]$) would produce very different downstream activations.
 
-## Numerical Example ($d = 4$)
+**After normalization:**
 
-<span style="font-size: 14px;">Consider a single token with a 4-dimensional hidden state.</span>
+Both vectors become $[-1.22, 0, 1.22]$ (the same normalized direction). The magnitude information is discarded, and only the direction (relative relationships between components) is preserved.
 
-<span style="font-size: 14px;">**Input:** $x = (2.0, \; 6.0, \; -2.0, \; 4.0)$, $\gamma = (1, 1, 1, 1)$, $\beta = (0, 0, 0, 0)$, $\epsilon = 0$.</span>
-
-<span style="font-size: 14px;">1. **Mean:**</span>
-
-$$
-\mu = \frac{1}{4}(2.0 + 6.0 + (-2.0) + 4.0) = \frac{10.0}{4} = 2.5
-$$
-
-<span style="font-size: 14px;">2. **Variance:**</span>
-
-$$
-\sigma^2 = \frac{1}{4}\left((2.0 - 2.5)^2 + (6.0 - 2.5)^2 + (-2.0 - 2.5)^2 + (4.0 - 2.5)^2\right)
-$$
-
-$$
-= \frac{1}{4}(0.25 + 12.25 + 20.25 + 2.25) = \frac{35.0}{4} = 8.75
-$$
-
-<span style="font-size: 14px;">3. **Standard deviation:** $\sqrt{8.75} \approx 2.9580$</span>
-
-<span style="font-size: 14px;">4. **Normalize** by subtracting the mean and dividing by the standard deviation:</span>
-
-$$
-\hat{x} = \frac{(-0.5, \; 3.5, \; -4.5, \; 1.5)}{2.9580} \approx (-0.1690, \; 1.1832, \; -1.5213, \; 0.5071)
-$$
-
-<span style="font-size: 14px;">Verification: the mean of $\hat{x}$ is approximately 0 and the variance is approximately 1.</span>
-
-<span style="font-size: 14px;">5. **Scale and shift** (with $\gamma = 1$, $\beta = 0$, output equals $\hat{x}$):</span>
-
-$$
-\text{LayerNorm}(x) \approx (-0.1690, \; 1.1832, \; -1.5213, \; 0.5071)
-$$
-
-<span style="font-size: 14px;">**With non-trivial parameters.** Suppose $\gamma = (0.5, \; 2.0, \; 1.0, \; 0.8)$ and $\beta = (0.1, \; -0.5, \; 0.0, \; 0.3)$:</span>
-
-$$
-\text{LayerNorm}(x) = \gamma \odot \hat{x} + \beta \approx (0.0155, \; 1.8664, \; -1.5213, \; 0.7057)
-$$
-
-<span style="font-size: 14px;">Feature 2 was amplified by $\gamma_2 = 2.0$, feature 1 was compressed by $\gamma_1 = 0.5$ and shifted up by $\beta_1 = 0.1$, and feature 4 was shifted up by $\beta_4 = 0.3$. This demonstrates how the learned parameters reshape the normalized distribution.</span>
+This is beneficial because in many cases, the relative pattern of activations (which components are large vs. small) is more informative than the absolute scale.
 
 ---
 
-## <span style="font-size: 16px;">Post-Norm vs Pre-Norm</span>
+## Parameter Count and Computational Cost
 
-<span style="font-size: 14px;">The original Transformer uses **post-norm**, where LayerNorm is applied after the residual addition:</span>
+**Parameters per LayerNorm:**
 
-$$
-\text{Post-Norm: } \quad x' = \text{LayerNorm}(x + \text{Sublayer}(x))
-$$
+- $\gamma$: $d_{model}$ parameters
+- $\beta$: $d_{model}$ parameters
+- Total: $2 \times d_{model}$ parameters
 
-<span style="font-size: 14px;">GPT-2 (Radford et al., 2019) introduced **pre-norm**, where LayerNorm is applied before the sub-layer:</span>
+For $d_{model} = 512$: $2 \times 512 = 1024$ parameters per LayerNorm.
 
-$$
-\text{Pre-Norm: } \quad x' = x + \text{Sublayer}(\text{LayerNorm}(x))
-$$
+With 2 LayerNorms per encoder block and 6 encoder blocks: $2 \times 6 \times 1024 = 12{,}288$ parameters. This is tiny compared to the attention and FFN parameters.
 
-<span style="font-size: 14px;">The difference has major consequences for training deep models:</span>
+**Computational cost:**
 
-* <span style="font-size: 14px;">**Gradient flow in post-norm:** The gradient must pass through LayerNorm at every layer. In very deep networks (24+ layers), this repeated modification can attenuate gradients. The original Transformer mitigates this with careful learning rate warmup.</span>
-* <span style="font-size: 14px;">**Gradient flow in pre-norm:** The residual connection provides a clean identity path. The gradient includes a direct $\frac{\partial x'}{\partial x} = 1$ term bypassing the sub-layer entirely, keeping gradients well-conditioned regardless of depth.</span>
-* <span style="font-size: 14px;">**Warmup sensitivity:** Post-norm requires careful warmup; without it, training often fails. Pre-norm is significantly less sensitive.</span>
-* <span style="font-size: 14px;">**Final quality:** Some research (Xiong et al., 2020) suggests post-norm can achieve slightly higher final quality when it converges, but it is harder to get working and the quality gap is small.</span>
+For each token, LayerNorm requires:
+- One pass to compute the mean: $d_{model}$ additions
+- One pass to compute the variance: $d_{model}$ subtractions, multiplications, additions
+- One pass to normalize and apply $\gamma$, $\beta$: $d_{model}$ operations
 
-<span style="font-size: 14px;">The modern consensus is clear: LLaMA, GPT-2, GPT-3, PaLM, Mistral, and virtually all decoder-only LLMs use pre-norm. The original Transformer's post-norm is historically important but has been superseded. Encoder-only models like BERT still use post-norm as originally designed.</span>
+Total: $O(d_{model})$ per token. This is negligible compared to the $O(d_{model}^2)$ cost of attention and FFN layers.
 
 ---
 
-## <span style="font-size: 16px;">Pitfalls</span>
+## Numerical Stability Considerations
 
-* <span style="font-size: 14px;">**Normalizing over the wrong dimension.** LayerNorm normalizes across the feature (last) dimension, not the batch or sequence dimension. Computing statistics over `dim=0` (batch) or `dim=1` (sequence) produces silently incorrect outputs that degrade model quality without raising errors.</span>
-* <span style="font-size: 14px;">**Setting epsilon too small.** Using $\epsilon = 10^{-12}$ causes numerical instability when the variance is near zero, particularly in float16 or bfloat16 mixed-precision training. The gradient through $1/\sqrt{\sigma^2 + \epsilon}$ explodes when $\sigma^2 + \epsilon$ is tiny. The standard value of $10^{-5}$ balances stability and accuracy.</span>
-* <span style="font-size: 14px;">**Confusing post-norm and pre-norm placement.** The original Transformer uses $\text{LayerNorm}(x + \text{Sublayer}(x))$ (post-norm). Most modern models use $x + \text{Sublayer}(\text{LayerNorm}(x))$ (pre-norm). Implementing one when intending the other changes gradient flow and can cause training instability.</span>
-* <span style="font-size: 14px;">**Forgetting gamma and beta.** Omitting the learnable parameters $\gamma$ and $\beta$ forces all activations to exactly zero mean and unit variance. The network loses the ability to learn per-feature scaling, degrading quality significantly. Custom implementations often forget them.</span>
-* <span style="font-size: 14px;">**Confusing LayerNorm with BatchNorm.** In a tensor of shape $(B, T, d)$, BatchNorm normalizes over dimension 0 ($B$) while LayerNorm normalizes over dimension 2 ($d$). Swapping the two produces completely wrong statistics and breaks training. BatchNorm also has running mean/variance that differ between training and inference, while LayerNorm has no such distinction.</span>
-* <span style="font-size: 14px;">**Applying LayerNorm to the wrong tensor in the residual block.** In post-norm, LayerNorm takes $x + \text{Sublayer}(x)$ as input. In pre-norm, LayerNorm takes $x$ alone. Normalizing the sub-layer output by itself, without the residual, breaks the intended architecture.</span>
-* <span style="font-size: 14px;">**Initializing gamma to zeros instead of ones.** If $\gamma$ starts at zero, all LayerNorm outputs are zero (before the bias), effectively disabling the sub-layer at initialization. Only the residual path carries signal, causing training instability. The correct initialization is $\gamma = 1$, $\beta = 0$.</span>
+When implementing LayerNorm, numerical precision matters:
+
+**Computing variance:**
+
+The naive formula $\sigma^2 = E[x^2] - (E[x])^2$ can suffer from **catastrophic cancellation** when $E[x^2]$ and $(E[x])^2$ are very close. The two-pass formula (first compute $\mu$, then compute $\sigma^2 = E[(x-\mu)^2]$) is numerically more stable.
+
+**Half-precision (float16):**
+
+Modern GPUs use 16-bit floating point for speed. LayerNorm can lose precision in float16 because:
+
+- The mean and variance calculations accumulate many small values
+- The division by $\sqrt{\sigma^2 + \epsilon}$ amplifies any error
+
+A common solution is to compute LayerNorm statistics in float32 even when the rest of the model uses float16. This is called "mixed precision" and is the standard practice in large model training.
 
 ---
+
+## Historical Context
+
+**Batch Normalization (2015):**
+
+Ioffe and Szegedy introduced BatchNorm, which dramatically accelerated training of convolutional networks. However, its batch-size dependence and behavior change between training and inference were limitations.
+
+**Layer Normalization (2016):**
+
+Ba, Kiros, and Hinton proposed LayerNorm specifically to address these limitations. They showed it was particularly effective for RNNs and other sequence models.
+
+**The Transformer (2017):**
+
+Vaswani et al. adopted LayerNorm in the Transformer architecture, establishing it as the standard normalization for attention-based models.
+
+**Pre-norm revolution (2018-2020):**
+
+Researchers discovered that moving LayerNorm before the sublayer (pre-norm) significantly improved training stability, enabling much deeper models.
+
+**RMSNorm (2019-present):**
+
+Zhang and Sennrich showed that the re-centering component of LayerNorm is often unnecessary, leading to the simpler RMSNorm used in modern architectures like LLaMA.
+
+The trajectory shows a consistent trend toward simpler, more computationally efficient normalization that preserves the core benefit of stabilizing activations.
