@@ -1,229 +1,439 @@
-# <span style="font-size: 20px;">Transformer Encoder Block</span>
+## The Building Block of the Transformer
 
-<span style="font-size: 14px;">The encoder block is the fundamental repeating unit of the Transformer encoder. Each block contains two sub-layers -- Multi-Head Self-Attention (MHA) and a position-wise Feed-Forward Network (FFN) -- each wrapped with a residual connection and followed by Layer Normalization. Stacking $N$ identical blocks produces the full encoder.</span>
+The Transformer encoder is not a single monolithic network. It is a stack of identical blocks, each performing the same sequence of operations. The original Transformer uses $N = 6$ blocks stacked on top of each other, with each block refining the representations produced by the block below.
 
-<span style="font-size: 14px;">Introduced in "Attention Is All You Need" (Vaswani et al., 2017), the encoder block replaced recurrence entirely with attention-based token mixing and per-position feed-forward computation. The design remains the backbone of BERT, ViT, and many encoder-based architectures.</span>
+Each encoder block takes a sequence of vectors as input and produces a sequence of vectors of the same shape as output. This uniformity of interface is what allows blocks to be stacked: the output of block 1 feeds directly into block 2, and so on.
 
----
-
-## <span style="font-size: 16px;">What It Is</span>
-
-<span style="font-size: 14px;">An encoder block is one complete repeating unit of the Transformer encoder. It takes a sequence of vectors $X \in \mathbb{R}^{T \times d_{\text{model}}}$ and produces an output of the same shape. The block does not change the sequence length or the hidden dimension -- it refines the representation in place.</span>
-
-<span style="font-size: 14px;">Internally, the block has exactly two sub-layers arranged in a fixed order:</span>
-
-* <span style="font-size: 14px;">**Sub-layer 1 -- Multi-Head Self-Attention (MHA):** Every token attends to every other token in the sequence. This is the "token mixing" step. Because this is self-attention, the queries, keys, and values all come from the same input.</span>
-* <span style="font-size: 14px;">**Sub-layer 2 -- Position-wise Feed-Forward Network (FFN):** A two-layer MLP applied independently to each position. This is the "channel mixing" step, where each token's representation is transformed without any interaction with other tokens.</span>
-
-<span style="font-size: 14px;">Each sub-layer is wrapped with a residual connection and followed by Layer Normalization. The output of one block becomes the input to the next, and the final block's output is the encoder's representation.</span>
+The encoder block is where all the individual components, multi-head attention, layer normalization, feed-forward network, and residual connections, come together into a unified architecture.
 
 ---
 
-## <span style="font-size: 16px;">Key Equations</span>
+## The Block Structure
 
-<span style="font-size: 14px;">The encoder block computes two sub-layer operations sequentially. Let $X$ be the input to the block.</span>
+Each encoder block contains two sub-layers, each wrapped with a residual connection and layer normalization:
 
-<span style="font-size: 14px;">**Sub-layer 1 -- Self-Attention with residual and LayerNorm:**</span>
-
-$$
-X' = \text{LayerNorm}(X + \text{MHA}(X, X, X))
-$$
-
-<span style="font-size: 14px;">Here $\text{MHA}(X, X, X)$ means the query, key, and value matrices are all derived from the same input $X$. The residual adds the original $X$ to the attention output, then LayerNorm is applied to the sum.</span>
-
-<span style="font-size: 14px;">**Sub-layer 2 -- FFN with residual and LayerNorm:**</span>
+**Sub-layer 1: Self-attention**
 
 $$
-\text{output} = \text{LayerNorm}(X' + \text{FFN}(X'))
+x' = \text{LayerNorm}(x + \text{MultiHeadAttention}(x, x, x))
 $$
 
-<span style="font-size: 14px;">The FFN itself is defined as:</span>
+**Sub-layer 2: Feed-forward network**
 
 $$
-\text{FFN}(x) = \text{ReLU}(x W_1 + b_1) W_2 + b_2
+\text{output} = \text{LayerNorm}(x' + \text{FFN}(x'))
 $$
 
-<span style="font-size: 14px;">where $W_1 \in \mathbb{R}^{d_{\text{model}} \times d_{ff}}$, $W_2 \in \mathbb{R}^{d_{ff} \times d_{\text{model}}}$, and $d_{ff} = 2048$ in the original paper (4x expansion from $d_{\text{model}} = 512$).</span>
+This pattern is described as "Add & Norm": add the sub-layer's output to its input (residual connection), then apply layer normalization.
 
-<span style="font-size: 14px;">The general pattern for both sub-layers can be written uniformly:</span>
+The full computation graph for one encoder block:
 
-$$
-\text{SubLayerOutput} = \text{LayerNorm}(x + \text{SubLayer}(x))
-$$
-
-<span style="font-size: 14px;">This uniform wrapping is what the paper describes as "a residual connection around each of the two sub-layers, followed by layer normalization."</span>
+1. Receive input $x$ (shape: $B \times L \times d_{model}$)
+2. Compute self-attention: $\text{attn} = \text{MultiHeadAttention}(x, x, x)$
+3. Add residual: $x_1 = x + \text{attn}$
+4. Normalize: $x' = \text{LayerNorm}_1(x_1)$
+5. Compute FFN: $\text{ffn} = \text{FFN}(x')$
+6. Add residual: $x_2 = x' + \text{ffn}$
+7. Normalize: $\text{output} = \text{LayerNorm}_2(x_2)$
+8. Return output (shape: $B \times L \times d_{model}$, same as input)
 
 ---
 
-## <span style="font-size: 16px;">The Two Sub-Layers</span>
+## Residual Connections: The Gradient Highway
 
-<span style="font-size: 14px;">The two sub-layers serve fundamentally different purposes, and understanding the division of labor is key to understanding the encoder block.</span>
+The residual connections ($x + \text{Sublayer}(x)$) are not optional decorations. They are essential for training deep networks. Without them, the Transformer would not work.
 
-<span style="font-size: 14px;">**Sub-layer 1: Multi-Head Self-Attention (token mixing).** This sub-layer allows every token to gather information from every other token. Given input $X$, it computes:</span>
+**The vanishing gradient problem:**
 
-$$
-Q = XW_Q, \quad K = XW_K, \quad V = XW_V
-$$
+In a deep network without residual connections, the gradient at layer $l$ depends on the product of gradients through all subsequent layers:
 
 $$
-\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^T}{\sqrt{d_k}}\right) V
+\frac{\partial \mathcal{L}}{\partial x_l} = \prod_{i=l+1}^{L} \frac{\partial F_i}{\partial x_{i-1}} \cdot \frac{\partial \mathcal{L}}{\partial x_L}
 $$
 
-<span style="font-size: 14px;">$Q$, $K$, and $V$ are all projected from the same $X$ -- this is what makes it "self"-attention. In the multi-head variant, $h$ separate attention computations run in parallel on subspaces of dimension $d_k = d_{\text{model}} / h$, then outputs are concatenated and projected. With $h = 8$, each head uses $d_k = 64$.</span>
+If each gradient factor has magnitude less than 1, this product shrinks exponentially with depth. A 6-layer network with factors of 0.5 would multiply gradients by $0.5^6 = 0.016$, effectively blocking learning in early layers.
 
-<span style="font-size: 14px;">The attention weights form a $T \times T$ matrix where each row sums to 1, representing how much each token attends to every other token. The encoder uses full bidirectional attention with no causal mask.</span>
+**How residual connections fix this:**
 
-<span style="font-size: 14px;">**Sub-layer 2: Position-wise FFN (channel mixing).** This sub-layer processes each token independently through the same two-layer MLP. "Position-wise" means the network is applied to each position separately with shared weights -- no information flows between positions.</span>
+With a residual connection $x_{l+1} = x_l + F_l(x_l)$, the gradient becomes:
 
-<span style="font-size: 14px;">The FFN expands from $d_{\text{model}}$ to $d_{ff}$, applies ReLU, then projects back. The expansion to $d_{ff} = 4 \times d_{\text{model}}$ gives capacity to learn complex per-token transformations. Think of attention as "which tokens should talk to each other" and FFN as "what to do with the information each token has gathered."</span>
+$$
+\frac{\partial x_{l+1}}{\partial x_l} = I + \frac{\partial F_l}{\partial x_l}
+$$
+
+The identity matrix $I$ provides a direct path for gradients to flow through, regardless of what $\frac{\partial F_l}{\partial x_l}$ does. Even if the sub-layer gradient is zero, the gradient through the residual path is exactly 1.
+
+**Through multiple layers:**
+
+$$
+\frac{\partial \mathcal{L}}{\partial x_l} = \frac{\partial \mathcal{L}}{\partial x_L} \left(I + \sum_{\text{paths}} \prod_{\text{sub-layers on path}} \frac{\partial F}{\partial x}\right)
+$$
+
+The gradient is a sum over all possible paths through the network, including the direct "skip all" path. This sum ensures that at least one path contributes a substantial gradient, preventing vanishing.
 
 ---
 
-## <span style="font-size: 16px;">Post-Norm Architecture</span>
+## The Role of Layer Normalization in the Block
 
-<span style="font-size: 14px;">The original Transformer uses what is now called the "Post-Norm" configuration: LayerNorm is applied **after** the residual addition. This is distinct from the "Pre-Norm" variant used in GPT-2, LLaMA, and most modern architectures.</span>
+Layer normalization appears after each residual addition, serving several purposes:
 
-<span style="font-size: 14px;">**Post-Norm (original Transformer):**</span>
+**Stabilizing activations:**
 
-$$
-\text{output} = \text{LayerNorm}(x + \text{SubLayer}(x))
-$$
+As residual connections accumulate, the magnitude of the representations can grow with depth. Each time we add the sub-layer output to the input, the values get larger. LayerNorm resets the scale, preventing unbounded growth.
 
-<span style="font-size: 14px;">**Pre-Norm (modern variant):**</span>
+**Enabling consistent learning rates:**
 
-$$
-\text{output} = x + \text{SubLayer}(\text{LayerNorm}(x))
-$$
+If different layers have representations at different scales, they require different effective learning rates. LayerNorm ensures all layers have similarly-scaled inputs, so a single learning rate works across the entire network.
 
-<span style="font-size: 14px;">The difference matters for training stability:</span>
+**Smoothing the loss landscape:**
 
-* <span style="font-size: 14px;">**Post-Norm** normalizes the combined signal (residual + sub-layer output). The sub-layer receives unnormalized input, which can have growing magnitude in deeper stacks. This makes training sensitive to learning rate and often requires warmup. However, post-norm can produce better final performance because the full representational capacity flows through the residual path.</span>
-* <span style="font-size: 14px;">**Pre-Norm** normalizes the input before the sub-layer, ensuring stable inputs regardless of depth. This eliminates the need for careful warmup, but some studies report slightly lower final quality compared to well-tuned post-norm.</span>
-
-<span style="font-size: 14px;">When implementing the original Transformer encoder block, it is essential to use post-norm. Placing LayerNorm in the wrong position changes the gradient flow entirely.</span>
+Research has shown that normalization techniques smooth the optimization landscape, reducing the number of sharp valleys and making gradient descent more reliable.
 
 ---
 
-## <span style="font-size: 16px;">Residual Connections</span>
+## Self-Attention Within the Block
 
-<span style="font-size: 14px;">Each sub-layer is wrapped with a residual (skip) connection. Instead of computing $y = f(x)$, the block computes $y = x + f(x)$. This simple addition has profound consequences.</span>
-
-<span style="font-size: 14px;">**Gradient highways.** During backpropagation, the gradient of $y = x + f(x)$ with respect to $x$ is:</span>
+The attention sub-layer in the encoder block uses **self-attention**: queries, keys, and values all come from the same input:
 
 $$
-\frac{\partial y}{\partial x} = I + \frac{\partial f(x)}{\partial x}
+\text{MultiHeadAttention}(x, x, x)
 $$
 
-<span style="font-size: 14px;">The identity matrix $I$ ensures gradients always have a direct path through the residual connection. Even if $\frac{\partial f}{\partial x}$ vanishes, the gradient through the identity path is exactly 1. This prevents the vanishing gradient problem.</span>
+All three arguments are the same tensor $x$. This means every token in the sequence attends to every other token in the same sequence (including itself).
 
-<span style="font-size: 14px;">**Enabling deep stacking.** The original Transformer uses $N = 6$ encoder blocks, meaning 12 sub-layers total. The skip connections allow each sub-layer to learn a small refinement rather than a complete transformation -- a much easier optimization target.</span>
+**What self-attention computes:**
 
-<span style="font-size: 14px;">**Dimension constraint.** For $x + f(x)$ to work, the sub-layer output must match the input dimension. This is why $d_{\text{model}}$ remains constant throughout the encoder. The paper notes: "all sub-layers in the model produce outputs of dimension $d_{\text{model}} = 512$" to facilitate these residual connections.</span>
+For each token, self-attention asks: "Given my current representation, which other tokens in this sequence are most relevant to me?"
+
+- A verb might attend to its subject and object
+- A pronoun might attend to its antecedent
+- A quantifier might attend to the noun it modifies
+
+**The output:**
+
+After self-attention, each token's representation has been enriched with information from the tokens it attended to. The representation of "it" now contains information about "cat" if the attention weights pointed there.
 
 ---
 
-## <span style="font-size: 16px;">Why This Specific Order</span>
+## The Feed-Forward Network Within the Block
 
-<span style="font-size: 14px;">The encoder block always runs attention first, then FFN. This ordering is not arbitrary.</span>
+After self-attention and its residual-plus-norm, the FFN applies an independent transformation to each position:
 
-<span style="font-size: 14px;">**Step 1: Attention captures dependencies.** Self-attention allows each token to read from all other tokens. After this step, each position's representation has been enriched with contextual information from the entire sequence. A token like "bank" can now carry information about whether "river" or "money" appeared nearby.</span>
+$$
+\text{FFN}(x) = \max(0, xW_1 + b_1)W_2 + b_2
+$$
 
-<span style="font-size: 14px;">**Step 2: FFN processes each position.** The feed-forward sub-layer takes the context-enriched representation and applies a nonlinear transformation independently at each position. This is where the model "processes" what each token means given its context. Research has shown FFN layers act as key-value memories storing factual associations.</span>
+**Its role in the block:**
 
-<span style="font-size: 14px;">**Step 3: LayerNorm stabilizes.** After each sub-layer (with its residual addition), LayerNorm re-centers and re-scales the activations, preventing drift to extreme magnitudes.</span>
+Self-attention aggregates information across positions but is linear in the values. The FFN provides:
 
-<span style="font-size: 14px;">If the order were reversed (FFN first, then attention), each token would be transformed in isolation before seeing its context. The attention layer would then mix already-transformed representations without contextual guidance. The attention-then-FFN order ensures contextual gathering happens before per-position reasoning.</span>
+- **Non-linearity**: The ReLU (or GELU/SwiGLU in modern variants) enables the network to compute non-linear functions
+- **Feature transformation**: Each token's enriched representation is refined and transformed
+- **Knowledge retrieval**: The FFN weights encode factual knowledge that the model can "look up"
+
+**The alternating pattern:**
+
+The attention-then-FFN pattern implements a two-phase processing cycle:
+
+1. **Gather** (attention): collect relevant information from context
+2. **Process** (FFN): transform the gathered information
+
+By repeating this cycle $N$ times (once per block), the model can perform increasingly sophisticated reasoning.
 
 ---
 
-## <span style="font-size: 16px;">Paper Context</span>
+## Stacking Blocks: Depth and Abstraction
 
-<span style="font-size: 14px;">The encoder block was introduced in "Attention Is All You Need" (Vaswani et al., 2017). The paper's encoder configuration:</span>
+The Transformer encoder stacks $N$ identical blocks. Each block has the same architecture but its own set of learned parameters.
 
-* <span style="font-size: 14px;">**Number of blocks ($N$):** 6 identical encoder layers stacked sequentially</span>
-* <span style="font-size: 14px;">**Model dimension ($d_{\text{model}}$):** 512</span>
-* <span style="font-size: 14px;">**Attention heads ($h$):** 8, each with $d_k = d_v = 64$</span>
-* <span style="font-size: 14px;">**FFN inner dimension ($d_{ff}$):** 2048 (4x expansion)</span>
-* <span style="font-size: 14px;">**Normalization:** Post-LayerNorm after residual addition</span>
-* <span style="font-size: 14px;">**Dropout:** Applied to sub-layer output before residual addition, $P_{\text{drop}} = 0.1$</span>
+**What happens at different depths?**
 
-<span style="font-size: 14px;">The paper states: "Each layer has two sub-layers. The first is a multi-head self-attention mechanism, and the second is a simple, position-wise fully connected feed-forward network. We employ a residual connection around each of the two sub-layers, followed by layer normalization."</span>
+Research on trained Transformers has revealed a hierarchy of processing:
 
-<span style="font-size: 14px;">The encoder was designed for the source side of machine translation. Unlike the decoder, it has no causal mask -- every token attends to every other token bidirectionally. This is what BERT later exploited for masked language modeling. With dropout, the full computation is $\text{LayerNorm}(x + \text{Dropout}(\text{SubLayer}(x)))$.</span>
+**Early layers (blocks 1-2):**
 
----
+- Build basic contextual representations
+- Capture local patterns (nearby words, common phrases)
+- Resolve simple ambiguities (e.g., distinguishing homographs based on immediate context)
+- Attention patterns tend to be local and syntactic
 
-## <span style="font-size: 16px;">Numerical Example</span>
+**Middle layers (blocks 3-4):**
 
-<span style="font-size: 14px;">Let us trace a concrete input through one encoder block with $d_{\text{model}} = 4$, $T = 2$, one attention head, and $d_{ff} = 8$.</span>
+- Build richer representations that combine multiple tokens' information
+- Capture medium-range dependencies (e.g., subject-verb agreement across a clause)
+- Attention patterns become more diverse and task-specific
 
-<span style="font-size: 14px;">**Input (after embedding + positional encoding):**</span>
+**Late layers (blocks 5-6):**
 
-$$
-X = \begin{bmatrix} 1.0 & 0.5 & -0.5 & 0.2 \\ 0.3 & -0.1 & 0.8 & -0.4 \end{bmatrix}
-$$
+- Produce task-ready representations
+- Capture global patterns and high-level semantics
+- Attention patterns are often the most specialized and interpretable
+- The final layer's output is used directly for downstream tasks
 
-<span style="font-size: 14px;">**Sub-layer 1: Self-Attention.** Assume the single-head attention produces:</span>
-
-$$
-\text{MHA}(X, X, X) = \begin{bmatrix} 0.12 & -0.08 & 0.15 & -0.03 \\ 0.09 & -0.05 & 0.11 & -0.02 \end{bmatrix}
-$$
-
-<span style="font-size: 14px;">**Residual addition:**</span>
-
-$$
-X + \text{MHA} = \begin{bmatrix} 1.12 & 0.42 & -0.35 & 0.17 \\ 0.39 & -0.15 & 0.91 & -0.42 \end{bmatrix}
-$$
-
-<span style="font-size: 14px;">**LayerNorm (post-norm).** For token 1: $[1.12, 0.42, -0.35, 0.17]$, mean $\mu = 0.34$, std $\sigma = 0.507$. After normalizing (with $\gamma = 1, \beta = 0$):</span>
-
-$$
-X' = \begin{bmatrix} 1.54 & 0.16 & -1.36 & -0.34 \\ 0.40 & -0.52 & 1.38 & -1.26 \end{bmatrix}
-$$
-
-<span style="font-size: 14px;">**Sub-layer 2: FFN.** Suppose $\text{ReLU}(X' W_1 + b_1) W_2 + b_2$ produces:</span>
-
-$$
-\text{FFN}(X') = \begin{bmatrix} 0.08 & -0.12 & 0.05 & 0.10 \\ -0.06 & 0.09 & -0.03 & 0.07 \end{bmatrix}
-$$
-
-<span style="font-size: 14px;">**Residual addition:**</span>
-
-$$
-X' + \text{FFN}(X') = \begin{bmatrix} 1.62 & 0.04 & -1.31 & -0.24 \\ 0.34 & -0.43 & 1.35 & -1.19 \end{bmatrix}
-$$
-
-<span style="font-size: 14px;">**LayerNorm (post-norm).** Normalize again per token:</span>
-
-$$
-\text{output} = \begin{bmatrix} 1.56 & 0.10 & -1.21 & -0.18 \\ 0.38 & -0.46 & 1.40 & -1.22 \end{bmatrix}
-$$
-
-<span style="font-size: 14px;">Output shape matches input: $(2, 4)$. Each sub-layer contributed a small refinement via its residual, and LayerNorm kept activations well-scaled. This output flows to the next block or, if final, to the decoder's cross-attention.</span>
+This hierarchical processing is analogous to how convolutional networks process images: early layers detect edges and textures, middle layers detect parts and shapes, and late layers detect objects and scenes.
 
 ---
 
-## <span style="font-size: 16px;">The Encoder Stack</span>
+## Worked Example: Data Flow Through One Block
 
-<span style="font-size: 14px;">The full encoder consists of $N = 6$ identical blocks stacked sequentially. "Identical" means same architecture (two sub-layers with residual + post-LayerNorm), but each block has its own learned parameters.</span>
+Consider a simple sequence of 3 tokens with $d_{model} = 4$, $h = 2$ heads ($d_k = 2$), and $d_{ff} = 8$.
 
-<span style="font-size: 14px;">**Progressive refinement.** Early blocks tend to capture local syntactic patterns (subject-verb agreement, phrase structure). Middle blocks build semantic relationships (coreference, entity types). Later blocks produce task-ready representations encoding global relationships.</span>
+**Input** $x$:
 
-<span style="font-size: 14px;">**Information flow.** Because encoder self-attention has no causal mask, every token can attend to every other token at every layer. By stacking 6 blocks, the model builds increasingly abstract and compositional representations.</span>
+$$
+x = \begin{pmatrix} 1.0 & 0.5 & -0.3 & 0.8 \\ -0.2 & 1.2 & 0.4 & -0.6 \\ 0.7 & -0.1 & 0.9 & 0.3 \end{pmatrix}
+$$
 
-<span style="font-size: 14px;">**Output to decoder.** The final block's output $\in \mathbb{R}^{T \times d_{\text{model}}}$ is used by decoder cross-attention as the key and value source. For encoder-only models like BERT, this output feeds directly into task-specific heads.</span>
+**Step 1: Multi-head self-attention**
 
-<span style="font-size: 14px;">**Why 6 blocks?** $N = 6$ balances capacity and training cost for translation. BERT-Base uses 12, BERT-Large uses 24. Each block adds roughly $4 d_{\text{model}}^2 + 2 d_{\text{model}} d_{ff}$ parameters plus LayerNorm parameters.</span>
+- Project $x$ into $Q, K, V$ using learned weights
+- Split into 2 heads (each operating on 2 dimensions)
+- Head 1 computes attention on first 2D subspace
+- Head 2 computes attention on second 2D subspace
+- Concatenate head outputs
+- Apply output projection $W^O$
+- Result: $\text{attn}$ has shape $(3, 4)$
+
+Suppose $\text{attn} = \begin{pmatrix} 0.1 & -0.2 & 0.05 & 0.15 \\ 0.3 & 0.1 & -0.1 & 0.2 \\ -0.05 & 0.15 & 0.2 & -0.1 \end{pmatrix}$
+
+**Step 2: Residual connection**
+
+$$
+x_1 = x + \text{attn} = \begin{pmatrix} 1.1 & 0.3 & -0.25 & 0.95 \\ 0.1 & 1.3 & 0.3 & -0.4 \\ 0.65 & 0.05 & 1.1 & 0.2 \end{pmatrix}
+$$
+
+**Step 3: Layer normalization**
+
+For each row, subtract mean and divide by standard deviation, then apply $\gamma$ and $\beta$.
+
+Row 1: mean $= 0.525$, values become centered around 0 with unit variance.
+
+Result: $x'$ has the same shape $(3, 4)$ but with normalized values.
+
+**Step 4: Feed-forward network**
+
+- Expand: $x' W_1 + b_1$ gives shape $(3, 8)$
+- ReLU: zero out negatives, same shape $(3, 8)$
+- Project back: $h' W_2 + b_2$ gives shape $(3, 4)$
+- Result: $\text{ffn}$ has shape $(3, 4)$
+
+**Step 5: Second residual connection**
+
+$$
+x_2 = x' + \text{ffn}
+$$
+
+**Step 6: Second layer normalization**
+
+$$
+\text{output} = \text{LayerNorm}_2(x_2)
+$$
+
+**Final output**: Shape $(3, 4)$, same as input. This output can feed into the next encoder block.
 
 ---
 
-## <span style="font-size: 16px;">Common Pitfalls</span>
+## Parameters in One Encoder Block
 
-<span style="font-size: 14px;">When implementing the encoder block, several mistakes commonly arise:</span>
+For the original Transformer configuration ($d_{model} = 512$, $h = 8$, $d_{ff} = 2048$):
 
-* <span style="font-size: 14px;">**Wrong LayerNorm placement (post-norm vs. pre-norm).** The original Transformer uses post-norm: $\text{LN}(x + f(x))$. Many modern implementations default to pre-norm: $x + f(\text{LN}(x))$. Using the wrong one changes the gradient flow and training dynamics entirely.</span>
-* <span style="font-size: 14px;">**Incorrect residual connections.** The residual must add the sub-layer's own input to its output. A common mistake is adding the block's original input $X$ to both sub-layers. Correct: sub-layer 1 uses $X$ as residual, producing $X'$. Sub-layer 2 uses $X'$ as residual. Each sub-layer has its own residual from its own input.</span>
-* <span style="font-size: 14px;">**Forgetting self-attention uses the same input for Q, K, and V.** In the encoder, Q, K, and V all come from the same $X$. This differs from decoder cross-attention where Q comes from the decoder and K, V from the encoder. Using different sources produces cross-attention, not self-attention.</span>
-* <span style="font-size: 14px;">**Missing one of the two sub-layers.** Both sub-layers are essential. Without FFN, the model has only token mixing and no per-position processing. Without attention, tokens cannot interact at all.</span>
-* <span style="font-size: 14px;">**Applying a causal mask in the encoder.** The encoder uses full bidirectional attention. Accidentally applying a causal (triangular) mask prevents tokens from attending to future positions, destroying the encoder's bidirectional nature.</span>
-* <span style="font-size: 14px;">**Forgetting dropout before residual addition.** The original architecture applies dropout to the sub-layer output before adding the residual: $\text{LN}(x + \text{Dropout}(\text{SubLayer}(x)))$. Placing dropout elsewhere changes the regularization effect.</span>
+**Multi-head attention:**
+
+- $W^Q, W^K, W^V, W^O$: $4 \times 512 \times 512 = 1{,}048{,}576$ parameters
+
+**Feed-forward network:**
+
+- $W_1$: $512 \times 2048 = 1{,}048{,}576$
+- $b_1$: $2048$
+- $W_2$: $2048 \times 512 = 1{,}048{,}576$
+- $b_2$: $512$
+- Total FFN: $2{,}099{,}712$ parameters
+
+**Layer normalization (2x):**
+
+- $\gamma_1, \beta_1$: $2 \times 512 = 1{,}024$
+- $\gamma_2, \beta_2$: $2 \times 512 = 1{,}024$
+- Total LayerNorm: $2{,}048$ parameters
+
+**Total per block:** approximately $3{,}150{,}336$ parameters ($\approx 3.15$ million)
+
+**Total encoder (6 blocks):** approximately $18{,}900{,}000$ parameters ($\approx 19$ million)
+
+The FFN accounts for about two-thirds of each block's parameters, with attention accounting for the remaining third. LayerNorm contributes negligibly.
+
+---
+
+## Dropout in the Encoder Block
+
+The original Transformer applies dropout at several points within the encoder block:
+
+**After attention output** (before residual addition):
+
+$$
+x' = \text{LayerNorm}(x + \text{Dropout}(\text{MultiHeadAttention}(x, x, x)))
+$$
+
+**Within attention** (on the attention weights):
+
+$$
+\alpha' = \text{Dropout}(\text{softmax}(QK^T / \sqrt{d_k}))
+$$
+
+**After FFN output** (before residual addition):
+
+$$
+\text{output} = \text{LayerNorm}(x' + \text{Dropout}(\text{FFN}(x')))
+$$
+
+**Dropout rates:**
+
+- Base model: $P_{drop} = 0.1$
+- Large model: $P_{drop} = 0.3$
+
+Dropout on attention weights is particularly interesting: it randomly prevents certain positions from attending to others, forcing the model to develop redundant attention patterns and not over-rely on any single position.
+
+---
+
+## Pre-Norm vs. Post-Norm Blocks
+
+The original Transformer uses post-norm (normalize after the residual addition):
+
+**Post-norm:**
+
+$$
+x' = \text{LayerNorm}(x + \text{Sublayer}(x))
+$$
+
+Most modern Transformers use pre-norm (normalize before the sublayer):
+
+**Pre-norm:**
+
+$$
+x' = x + \text{Sublayer}(\text{LayerNorm}(x))
+$$
+
+**Why pre-norm became standard:**
+
+In post-norm, the residual path passes through LayerNorm, which can dampen gradients. In pre-norm, the residual path is completely clean: $x' = x + \text{something}$. This means gradients flow through the residual path with no attenuation at all.
+
+The difference is dramatic for deep models:
+
+- Post-norm 6-layer models: train well, but deeper models (24+ layers) require careful warmup
+- Pre-norm models: train stably even at 100+ layers without warmup
+- GPT-2, GPT-3, LLaMA, and most modern LLMs use pre-norm
+
+---
+
+## The Encoder Stack
+
+The full Transformer encoder is $N$ blocks stacked sequentially:
+
+$$
+h^{(0)} = \text{TokenEmbedding}(x) + \text{PositionalEncoding}
+$$
+
+$$
+h^{(l)} = \text{EncoderBlock}_l(h^{(l-1)}) \quad \text{for } l = 1, \ldots, N
+$$
+
+$$
+\text{EncoderOutput} = h^{(N)}
+$$
+
+Each block has its own set of parameters (its own attention weights, FFN weights, and LayerNorm parameters), but they all share the same architecture.
+
+**Why identical blocks?**
+
+The simplicity of identical blocks has several advantages:
+
+- Easier to implement and debug
+- Easier to analyze theoretically
+- Allows techniques like weight sharing (using the same parameters for all blocks, as in Universal Transformers)
+- Allows easy scaling: just add more blocks
+
+---
+
+## Computational Flow Summary
+
+The complete data flow through the encoder, from text to final representations:
+
+**Input pipeline:**
+
+- Raw text $\rightarrow$ Tokenizer $\rightarrow$ Token IDs $[z_1, \ldots, z_n]$
+- Token IDs $\rightarrow$ Embedding layer $\rightarrow$ Scaled embeddings $[\mathbf{e}_1, \ldots, \mathbf{e}_n]$
+- Scaled embeddings $+$ Positional encodings $= h^{(0)}$
+
+**Encoder blocks (repeated N times):**
+
+- $h^{(0)} \rightarrow$ Block 1 $\rightarrow h^{(1)}$
+- $h^{(1)} \rightarrow$ Block 2 $\rightarrow h^{(2)}$
+- $\ldots$
+- $h^{(N-1)} \rightarrow$ Block N $\rightarrow h^{(N)}$
+
+**Output:**
+
+- $h^{(N)}$ is the final encoder output, shape $(B, L, d_{model})$
+- Each vector $h^{(N)}_i$ is a rich contextual representation of token $i$, informed by the entire input sequence
+- This output can be used for classification, fed to a decoder, or used for any downstream task
+
+---
+
+## The Encoder Block in Different Transformer Variants
+
+While the basic structure remains the same, different Transformer variants modify the encoder block:
+
+**BERT (Bidirectional Encoder Representations from Transformers):**
+
+- Uses the standard encoder block with post-norm
+- 12 blocks for BERT-Base, 24 for BERT-Large
+- GELU activation instead of ReLU in the FFN
+- No masking in self-attention (bidirectional: every token sees every other token)
+
+**GPT (Generative Pre-trained Transformer):**
+
+- Uses only decoder blocks (no encoder)
+- Decoder blocks are similar to encoder blocks but with causal masking
+- Pre-norm in GPT-2 and later
+
+**Vision Transformer (ViT):**
+
+- Uses standard encoder blocks
+- Input is image patches instead of text tokens
+- A special learnable "class token" is prepended to the sequence
+- The class token's final representation is used for classification
+
+**T5 (Text-to-Text Transfer Transformer):**
+
+- Uses both encoder and decoder blocks
+- Relative position biases instead of absolute positional encodings
+- Pre-norm throughout
+
+The encoder block's design has proven remarkably versatile, requiring only minor modifications to work across text, images, audio, video, protein sequences, and more.
+
+---
+
+## Why This Architecture Works
+
+The encoder block's success can be attributed to several interacting design principles:
+
+**Separation of concerns:**
+
+Attention handles communication (which tokens should interact), and FFN handles computation (how to transform the gathered information). This clean separation makes each component's role clear and learnable.
+
+**Residual learning:**
+
+Each sub-layer only needs to learn the "residual" or "correction" to the identity function. This is easier than learning the full transformation from scratch, especially in deep networks.
+
+**Normalization:**
+
+LayerNorm keeps activations in a stable range, preventing the cascading instabilities that plague deep networks.
+
+**Composability:**
+
+Because each block has the same input and output shape, blocks can be freely stacked, removed, or shared. This makes the architecture highly modular and scalable.
+
+**Parallelism:**
+
+All positions within a sequence are processed simultaneously (no sequential dependencies within a layer). All heads within multi-head attention are computed in parallel. This makes the Transformer extremely efficient on modern parallel hardware.
+
+These principles, simple individually, interact synergistically to create an architecture that scales from small models (a few million parameters) to enormous ones (hundreds of billions) while maintaining trainability and performance.
