@@ -1,185 +1,366 @@
-# <span style="font-size: 20px;">Sinusoidal Positional Encoding</span>
+## The Position Problem
 
-<span style="font-size: 14px;">Transformers process all tokens in parallel, so unlike RNNs, they have no built-in notion of token order. Sinusoidal positional encoding, introduced in Vaswani et al. (2017), solves this by adding a fixed, deterministic signal to each token embedding that encodes its position in the sequence. The encoding uses sine and cosine functions at different frequencies, producing a unique positional fingerprint for every position. The output is a matrix of shape (seq_len, d_model) with all values in [-1, 1].</span>
+A Transformer processes all tokens in a sequence simultaneously through parallel matrix operations. Unlike a recurrent neural network, which reads tokens one by one and naturally knows "this is the 5th word I have seen," the Transformer has no inherent notion of order.
 
----
+This creates a serious problem. Consider two sentences:
 
-## <span style="font-size: 16px;">What It Is</span>
+- "The dog bit the man"
+- "The man bit the dog"
 
-<span style="font-size: 14px;">Sinusoidal positional encoding is a fixed signal added element-wise to token embeddings before they enter the Transformer encoder or decoder stack. It requires no learned parameters. For a given position and dimension, the encoding value is computed by evaluating either a sine or cosine function at a specific frequency.</span>
+Both contain the exact same words. Without position information, the Transformer would produce identical representations for both sentences, because the set of embeddings is identical. The attention mechanism computes dot products between all pairs of tokens, and dot products are symmetric with respect to ordering.
 
-<span style="font-size: 14px;">Each position gets a unique vector in $\mathbb{R}^{d_{\text{model}}}$, computed once from a deterministic formula. Given a token embedding $e \in \mathbb{R}^{d_{\text{model}}}$ at position $pos$, the input to the Transformer is:</span>
+Formally, the attention operation is **permutation equivariant**: if you shuffle the input tokens, the output tokens shuffle in the same way but their values do not change. The model cannot distinguish position 1 from position 7.
 
-$$
-\text{input}(pos) = e(pos) + PE(pos)
-$$
-
-<span style="font-size: 14px;">where $PE(pos) \in \mathbb{R}^{d_{\text{model}}}$ is the positional encoding vector. This is element-wise addition, so both vectors share the same dimensionality. The encoding adds zero learnable parameters and is identical across every forward pass, every batch, every epoch.</span>
+Positional encoding solves this by injecting position information directly into the input representations.
 
 ---
 
-## <span style="font-size: 16px;">Key Equations</span>
+## The Idea: Add Position to Meaning
 
-<span style="font-size: 14px;">The positional encoding for position $pos$ and dimension index $i$ is defined by two formulas:</span>
-
-$$
-PE(pos, 2i) = \sin\!\left(\frac{pos}{10000^{2i / d_{\text{model}}}}\right)
-$$
+The solution is simple in concept: create a unique vector for each position, and add it to the token embedding at that position.
 
 $$
-PE(pos, 2i+1) = \cos\!\left(\frac{pos}{10000^{2i / d_{\text{model}}}}\right)
+\mathbf{x}_i = \mathbf{e}_i + \text{PE}(i)
 $$
 
-<span style="font-size: 14px;">where $pos$ is the 0-indexed sequence position, $i$ is the dimension pair index ranging from $0$ to $d_{\text{model}}/2 - 1$, and $d_{\text{model}}$ is the model dimension. Even-indexed dimensions ($0, 2, 4, \ldots$) use sine; odd-indexed dimensions ($1, 3, 5, \ldots$) use cosine.</span>
+where $\mathbf{e}_i$ is the token embedding at position $i$ and $\text{PE}(i) \in \mathbb{R}^{d_{model}}$ is the positional encoding vector for position $i$.
 
-<span style="font-size: 14px;">The shared argument for each (sin, cos) pair is:</span>
+After this addition, the vector $\mathbf{x}_i$ carries both **what** the token is (from the embedding) and **where** it is (from the positional encoding). The Transformer can then use attention to compute relationships that depend on both identity and position.
 
-$$
-\theta_i = \frac{pos}{10000^{2i / d_{\text{model}}}}
-$$
-
-<span style="font-size: 14px;">Dimensions $2i$ and $2i+1$ form a pair evaluated at the same angle $\theta_i$. Together they trace a point on the unit circle for that frequency, encoding position as a rotation. The output matrix $PE \in \mathbb{R}^{L \times d_{\text{model}}}$ has all values in $[-1, 1]$.</span>
+The key design question is: how should we construct $\text{PE}(i)$?
 
 ---
 
-## <span style="font-size: 16px;">The Frequency Schedule</span>
+## Sinusoidal Positional Encoding
 
-<span style="font-size: 14px;">The denominator $10000^{2i / d_{\text{model}}}$ creates a geometric progression of wavelengths across dimensions. Rewriting as the wavelength for dimension pair $i$:</span>
+The original Transformer paper uses a deterministic, formula-based encoding using sine and cosine functions at different frequencies:
 
 $$
-\lambda_i = 2\pi \cdot 10000^{2i / d_{\text{model}}}
+\text{PE}(pos, 2i) = \sin\left(\frac{pos}{10000^{2i / d_{model}}}\right)
 $$
 
-<span style="font-size: 14px;">When $i = 0$ (dimensions 0 and 1), $\lambda_0 = 2\pi \approx 6.28$. This is the shortest wavelength and highest frequency. The sin/cos values change rapidly from one position to the next, encoding fine-grained positional differences.</span>
+$$
+\text{PE}(pos, 2i+1) = \cos\left(\frac{pos}{10000^{2i / d_{model}}}\right)
+$$
 
-<span style="font-size: 14px;">When $i = d_{\text{model}}/2 - 1$ (the last pair), $\lambda_{\max} = 2\pi \cdot 10000 \approx 62{,}832$. This is the longest wavelength and lowest frequency, encoding coarse, large-scale positional information that changes slowly across positions.</span>
+where:
 
-<span style="font-size: 14px;">Between these extremes, wavelengths grow geometrically. For the original Transformer with $d_{\text{model}} = 512$, the ratio between consecutive wavelengths is $10000^{2/512} \approx 1.036$, so each successive pair has a wavelength about 3.6% longer. This multi-scale structure is analogous to a clock: the seconds digit changes fastest, the hours digit slowest, and their combination uniquely identifies a time.</span>
+- $pos$ is the position in the sequence (0, 1, 2, ...)
+- $i$ is the dimension index (0, 1, 2, ..., $d_{model}/2 - 1$)
+- Even dimensions ($2i$) use sine, odd dimensions ($2i+1$) use cosine
+- The denominator $10000^{2i/d_{model}}$ controls the frequency
+
+Each pair of dimensions $(2i, 2i+1)$ forms a sine-cosine pair at a specific frequency, creating a unique "fingerprint" for each position.
 
 ---
 
-## <span style="font-size: 16px;">Why Sinusoidal</span>
+## Understanding the Frequencies
 
-<span style="font-size: 14px;">Vaswani et al. chose sinusoidal functions for several specific reasons:</span>
-
-<span style="font-size: 14px;">**No learning required.** The encoding is computed from a fixed formula, adds zero parameters, and cannot overfit to the training data's position distribution.</span>
-
-<span style="font-size: 14px;">**Generalization to longer sequences.** The sinusoidal functions are defined for any real-valued input, so the encoding can be computed for positions beyond those seen during training. A model trained on length 512 can produce valid encodings for position 5000. Values remain in [-1, 1] and the multi-frequency structure is preserved. This extrapolation property was a primary motivation for choosing sinusoidal over learned encodings.</span>
-
-<span style="font-size: 14px;">**Relative position via linear combination.** For any fixed offset $k$, $PE(pos + k)$ can be expressed as a linear function of $PE(pos)$. For each (sin, cos) pair at frequency index $i$:</span>
+The key to understanding sinusoidal encoding is the frequency term:
 
 $$
-\begin{pmatrix} \sin(\theta_{pos+k}) \\ \cos(\theta_{pos+k}) \end{pmatrix} = \begin{pmatrix} \cos(\theta_k) & \sin(\theta_k) \\ -\sin(\theta_k) & \cos(\theta_k) \end{pmatrix} \begin{pmatrix} \sin(\theta_{pos}) \\ \cos(\theta_{pos}) \end{pmatrix}
+\omega_i = \frac{1}{10000^{2i / d_{model}}}
 $$
 
-<span style="font-size: 14px;">where $\theta_{pos} = pos / 10000^{2i/d_{\text{model}}}$ and $\theta_k = k / 10000^{2i/d_{\text{model}}}$. The rotation matrix depends only on $k$, not on $pos$. The model can learn to attend to relative positions by learning a linear transformation, since the relationship between positions separated by the same offset is always the same rotation.</span>
+This creates a geometric progression of frequencies across dimensions:
 
-<span style="font-size: 14px;">**Unique encoding per position.** The combination of sinusoids at different frequencies produces a unique vector for each position, giving the model an unambiguous positional signal.</span>
+- **Dimension 0-1** ($i = 0$): $\omega_0 = 1$. The sine and cosine complete a full cycle every $2\pi \approx 6.28$ positions. This encodes very fine-grained position differences.
+
+- **Dimension 2-3** ($i = 1$): $\omega_1 = 1/10000^{2/d_{model}}$. Slightly lower frequency, slightly longer wavelength.
+
+- **Last dimensions** ($i = d_{model}/2 - 1$): $\omega_{d/2-1} = 1/10000$. The sine and cosine have a period of $10000 \times 2\pi \approx 62{,}832$ positions. This encodes very coarse position information.
+
+**Analogy to binary counting:**
+
+Think of each sine-cosine pair as a "clock hand" rotating at a different speed:
+
+- The fastest hand (low dimensions) ticks rapidly, distinguishing neighboring positions
+- The slowest hand (high dimensions) rotates slowly, distinguishing positions that are far apart
+- Together, the combination of all hands uniquely identifies every position
+
+This is analogous to how binary numbers work: the least significant bit alternates every number (0, 1, 0, 1, ...), the next bit alternates every 2 numbers (0, 0, 1, 1, ...), and so on. Each bit (dimension) captures position information at a different scale.
 
 ---
 
-## <span style="font-size: 16px;">Even/Odd Pairing</span>
+## Why Sine and Cosine Together?
 
-<span style="font-size: 14px;">The encoding assigns sine to even-indexed dimensions and cosine to odd-indexed dimensions. Dimensions $2i$ and $2i+1$ form a pair sharing the same frequency but using complementary trigonometric functions.</span>
+Using both sine and cosine for each frequency is not arbitrary. It enables the model to learn **relative position** relationships through simple linear operations.
 
-<span style="font-size: 14px;">This pairing is not arbitrary. Together, $\sin(\theta)$ and $\cos(\theta)$ encode a position as a point on the unit circle. Given both values, the angle is uniquely determined (up to $2\pi$ periodicity). If only sine were used, positions at $\theta$ and $\pi - \theta$ would be indistinguishable. The cosine resolves this ambiguity.</span>
+**The linear relationship property:**
 
-<span style="font-size: 14px;">The (sin, cos) pair at each frequency also enables the linear combination property. The rotation matrix that maps $PE(pos)$ to $PE(pos + k)$ operates on 2D blocks of (sin, cos) pairs. If both dimensions used the same function, the rotation would not work as a matrix multiplication.</span>
+For any fixed offset $k$, the positional encoding at position $pos + k$ can be expressed as a linear transformation of the encoding at position $pos$:
 
-<span style="font-size: 14px;">In implementation, the encoding is constructed by creating a position vector $pos = [0, 1, \ldots, L-1]^T$ of shape $(L, 1)$ and a frequency vector $\text{div\_term} = 10000^{-2i / d_{\text{model}}}$ of shape $(1, d_{\text{model}}/2)$. Their outer product gives angles $\Theta$ of shape $(L, d_{\text{model}}/2)$. Applying sin and cos then interleaving produces the final $(L, d_{\text{model}})$ matrix.</span>
+$$
+\begin{pmatrix} \text{PE}(pos+k, 2i) \\ \text{PE}(pos+k, 2i+1) \end{pmatrix} = \begin{pmatrix} \cos(k\omega_i) & \sin(k\omega_i) \\ -\sin(k\omega_i) & \cos(k\omega_i) \end{pmatrix} \begin{pmatrix} \text{PE}(pos, 2i) \\ \text{PE}(pos, 2i+1) \end{pmatrix}
+$$
+
+This is a **rotation matrix**. Moving $k$ positions forward is equivalent to rotating each sine-cosine pair by an angle proportional to $k$.
+
+**Why this matters:**
+
+The attention mechanism computes dot products between positions. If the model can represent relative offsets as linear transformations of absolute positions, then the attention weights can learn to be sensitive to relative distances.
+
+For example, the model might learn that "the word 3 positions to the left is important for this word" without needing to know the absolute positions. The rotation property makes this possible.
+
+If we used only sine (or only cosine), this rotation property would break. We need both components to represent a point on a circle, which can then be rotated.
 
 ---
 
-## <span style="font-size: 16px;">Paper Context</span>
+## Worked Example
 
-<span style="font-size: 14px;">Vaswani et al. introduced sinusoidal positional encoding in "Attention Is All You Need" (2017), Section 3.5. The paper states: "Since our model contains no recurrence and no convolution, in order for the model to make use of the order of the sequence, we must inject some information about the relative or absolute position of the tokens in the sequence."</span>
+Consider $d_{model} = 4$ and a sequence of length 5.
 
-<span style="font-size: 14px;">The authors also tested learned positional embeddings and report in Table 3, row (E), that they produced nearly identical results on the base model. They chose sinusoidal for the final model because it "would allow the model to extrapolate to sequence lengths longer than the ones encountered during training."</span>
+**Frequencies:**
 
-<span style="font-size: 14px;">The original Transformer used $d_{\text{model}} = 512$ (base) and $d_{\text{model}} = 1024$ (big), with maximum sequence length of 512 tokens. The positional encoding was added at the bottom of both encoder and decoder stacks.</span>
+- Dimensions 0-1 ($i = 0$): $\omega_0 = 1/10000^{0/4} = 1/1 = 1$
+- Dimensions 2-3 ($i = 1$): $\omega_1 = 1/10000^{2/4} = 1/100 = 0.01$
 
-<span style="font-size: 14px;">Since 2017, most large language models have moved away from sinusoidal encoding. BERT (2019) and GPT-2 (2019) use learned positional embeddings. RoPE (Su et al., 2021), used in LLaMA and similar models, rotates query and key vectors by position-dependent angles so the attention dot product directly encodes relative position $(i - j)$. ALiBi (Press et al., 2022) adds a position-dependent bias to attention scores. Sinusoidal encoding remains foundational because it introduced the insight that position can be encoded via multi-frequency periodic functions.</span>
+**Position 0:**
 
----
+- $\text{PE}(0, 0) = \sin(0 \times 1) = \sin(0) = 0$
+- $\text{PE}(0, 1) = \cos(0 \times 1) = \cos(0) = 1$
+- $\text{PE}(0, 2) = \sin(0 \times 0.01) = \sin(0) = 0$
+- $\text{PE}(0, 3) = \cos(0 \times 0.01) = \cos(0) = 1$
+- Result: $[0, 1, 0, 1]$
 
-## <span style="font-size: 16px;">Numerical Example</span>
+**Position 1:**
 
-<span style="font-size: 14px;">Consider $d_{\text{model}} = 4$ and $\text{seq\_len} = 3$. The output is a $3 \times 4$ matrix. Dimension pairs: $(i=0)$ for columns 0,1 and $(i=1)$ for columns 2,3.</span>
+- $\text{PE}(1, 0) = \sin(1 \times 1) = \sin(1) \approx 0.841$
+- $\text{PE}(1, 1) = \cos(1 \times 1) = \cos(1) \approx 0.540$
+- $\text{PE}(1, 2) = \sin(1 \times 0.01) = \sin(0.01) \approx 0.010$
+- $\text{PE}(1, 3) = \cos(1 \times 0.01) = \cos(0.01) \approx 1.000$
+- Result: $[0.841, 0.540, 0.010, 1.000]$
 
-<span style="font-size: 14px;">**Frequency computation.** Denominators for each pair:</span>
+**Position 2:**
 
-$$
-\text{div}_0 = 10000^{0/4} = 10000^0 = 1, \quad \text{div}_1 = 10000^{2/4} = 10000^{0.5} = 100
-$$
+- $\text{PE}(2, 0) = \sin(2) \approx 0.909$
+- $\text{PE}(2, 1) = \cos(2) \approx -0.416$
+- $\text{PE}(2, 2) = \sin(0.02) \approx 0.020$
+- $\text{PE}(2, 3) = \cos(0.02) \approx 1.000$
+- Result: $[0.909, -0.416, 0.020, 1.000]$
 
-<span style="font-size: 14px;">**Position 0.** Angles: $\theta_0 = 0/1 = 0$ and $\theta_1 = 0/100 = 0$.</span>
-
-$$
-PE(0, 0) = \sin(0) = 0.0000, \quad PE(0, 1) = \cos(0) = 1.0000
-$$
-
-$$
-PE(0, 2) = \sin(0) = 0.0000, \quad PE(0, 3) = \cos(0) = 1.0000
-$$
-
-<span style="font-size: 14px;">**Position 1.** Angles: $\theta_0 = 1/1 = 1$ and $\theta_1 = 1/100 = 0.01$.</span>
-
-$$
-PE(1, 0) = \sin(1) = 0.8415, \quad PE(1, 1) = \cos(1) = 0.5403
-$$
-
-$$
-PE(1, 2) = \sin(0.01) = 0.0100, \quad PE(1, 3) = \cos(0.01) = 0.9999
-$$
-
-<span style="font-size: 14px;">**Position 2.** Angles: $\theta_0 = 2/1 = 2$ and $\theta_1 = 2/100 = 0.02$.</span>
-
-$$
-PE(2, 0) = \sin(2) = 0.9093, \quad PE(2, 1) = \cos(2) = -0.4161
-$$
-
-$$
-PE(2, 2) = \sin(0.02) = 0.0200, \quad PE(2, 3) = \cos(0.02) = 0.9998
-$$
-
-<span style="font-size: 14px;">**Full positional encoding matrix:**</span>
-
-$$
-PE = \begin{pmatrix} 0.0000 & 1.0000 & 0.0000 & 1.0000 \\ 0.8415 & 0.5403 & 0.0100 & 0.9999 \\ 0.9093 & -0.4161 & 0.0200 & 0.9998 \end{pmatrix}
-$$
-
-<span style="font-size: 14px;">**Observations:**</span>
-
-* <span style="font-size: 14px;">**Columns 0-1 (high frequency, $i=0$):** Values change rapidly. From pos 0 to 2, $\sin$ goes 0.0 to 0.91, $\cos$ goes 1.0 to -0.42. Fine-grained position signal.</span>
-* <span style="font-size: 14px;">**Columns 2-3 (low frequency, $i=1$):** Values change slowly. $\sin$ goes 0.0 to 0.02, $\cos$ stays near 1.0. Coarse position signal.</span>
-* <span style="font-size: 14px;">**All values in [-1, 1]:** Guaranteed by sine/cosine.</span>
-* <span style="font-size: 14px;">**Position 0 has a distinctive pattern:** All sin values are 0, all cos values are 1, giving $(0, 1, 0, 1)$.</span>
-* <span style="font-size: 14px;">**Each row is unique:** No two positions share the same encoding vector.</span>
+Notice how the low-frequency dimensions (2-3) change very slowly between positions, while the high-frequency dimensions (0-1) change rapidly. Each position gets a unique combination.
 
 ---
 
-## <span style="font-size: 16px;">Sinusoidal vs Learned vs RoPE</span>
+## Uniqueness of Position Encodings
 
-<span style="font-size: 14px;">Three major approaches to positional encoding have emerged in the Transformer literature:</span>
+Each position receives a unique encoding vector. To see why, note that the encoding for position $pos$ is:
 
-<span style="font-size: 14px;">**Sinusoidal (Vaswani et al., 2017).** Fixed, deterministic, added to token embeddings. Zero learnable parameters. Can extrapolate to positions beyond training length. However, the fixed nature prevents task-specific adaptation. Encodes absolute position: each position always gets the same vector regardless of context.</span>
+$$
+\text{PE}(pos) = \left[\sin(pos \cdot \omega_0), \cos(pos \cdot \omega_0), \sin(pos \cdot \omega_1), \cos(pos \cdot \omega_1), \ldots\right]
+$$
 
-<span style="font-size: 14px;">**Learned positional embeddings (BERT, GPT-2).** A lookup table of shape $(L_{\max}, d_{\text{model}})$ with learnable vectors. More flexible since the model can learn task-specific positional patterns. The downside is a hard maximum sequence length: positions beyond $L_{\max}$ have no embedding, preventing extrapolation. Adds $L_{\max} \times d_{\text{model}}$ parameters (393,216 for BERT with $L_{\max} = 512$, $d_{\text{model}} = 768$).</span>
+The frequencies $\omega_0, \omega_1, \ldots$ are incommensurable (their ratios are irrational), which guarantees that no two positions can produce the same encoding vector, even for arbitrarily long sequences.
 
-<span style="font-size: 14px;">**RoPE (Su et al., 2021).** Does not add a vector to embeddings. Instead, rotates query and key vectors by position-dependent angles before the dot product, so $q_i^T k_j$ naturally encodes relative position $(i - j)$. No learnable parameters. Can theoretically extrapolate, though practical long-context use requires scaling techniques. Directly encodes relative position, which is what attention mechanisms actually need.</span>
+**Dot product between positions:**
 
-<span style="font-size: 14px;">The progression reflects deepening understanding: sinusoidal showed periodic functions can encode position; learned embeddings showed flexibility helps; RoPE showed encoding relative position directly in attention is more principled than adding absolute position to embeddings.</span>
+The dot product between the positional encodings at positions $pos_1$ and $pos_2$ depends only on their difference $\Delta = pos_1 - pos_2$:
+
+$$
+\text{PE}(pos_1)^T \text{PE}(pos_2) = \sum_{i=0}^{d_{model}/2 - 1} \cos(\Delta \cdot \omega_i)
+$$
+
+This means the "similarity" between two position encodings is a function of their relative distance, not their absolute positions. Nearby positions have higher dot products (more similar encodings), and distant positions have lower dot products.
+
+---
+
+## Why Not Just Use Integers?
+
+A naive approach would be to encode position as a single number: position 0 gets value 0, position 1 gets value 1, position 100 gets value 100.
+
+This fails for several reasons:
+
+- **Unbounded magnitude**: Position 1000 would have a magnitude 1000 times larger than position 1, creating numerical instability
+- **Single dimension**: One number cannot capture the rich structure needed for the model to reason about multiple position-dependent patterns simultaneously
+- **No periodicity**: The model cannot easily learn patterns like "every 3rd word" or "the previous word"
+
+The sinusoidal encoding solves all of these:
+
+- **Bounded values**: Sine and cosine are always between $-1$ and $+1$, regardless of position
+- **Multi-dimensional**: $d_{model}$ dimensions capture position at many scales
+- **Periodic structure**: Different frequencies naturally encode patterns at different scales
 
 ---
 
-## <span style="font-size: 16px;">Pitfalls</span>
+## Addition vs. Concatenation
 
-* <span style="font-size: 14px;">**Wrong dimension index.** The formula uses $2i$ in the exponent, not $i$. For $d_{\text{model}} = 512$, the pair index $i$ ranges 0 to 255 and the exponent is $2i/512$, not $i/512$. Using $i/512$ halves all frequencies.</span>
-* <span style="font-size: 14px;">**Wrong base constant.** The base is 10000, not 1000 or 100000. This value spans wavelengths from $2\pi$ (about 6.28 positions) to $2\pi \cdot 10000$ (about 62,832 positions). A different base changes the frequency range.</span>
-* <span style="font-size: 14px;">**Forgetting the even/odd split.** Applying sine to all dimensions or cosine to all dimensions destroys the unique identification property and breaks the linear combination for relative positions. The correct pattern is sine for even (0, 2, 4, ...) and cosine for odd (1, 3, 5, ...).</span>
-* <span style="font-size: 14px;">**Wrong division in the exponent.** The exponent is $2i / d_{\text{model}}$, producing values from 0 to roughly 1. Common errors: $2i \cdot d_{\text{model}}$ (multiplication instead of division) or $d_{\text{model}} / 2i$ (inverted fraction), both producing wildly incorrect frequencies.</span>
-* <span style="font-size: 14px;">**Values outside [-1, 1].** Every entry is a sine or cosine output, so results must be in $[-1, 1]$. Values outside this range indicate an implementation error.</span>
-* <span style="font-size: 14px;">**Concatenating instead of adding.** The positional encoding is added to the token embedding, not concatenated. If your output dimension is $2 \cdot d_{\text{model}}$, you are concatenating.</span>
-* <span style="font-size: 14px;">**Off-by-one in position indexing.** Positions are 0-indexed. The first token is at position 0, not 1. Starting at 1 shifts all encodings and loses the distinctive anchor at position 0 where $\sin(0) = 0$ and $\cos(0) = 1$.</span>
+The Transformer adds positional encodings to token embeddings rather than concatenating them. This is a design choice with important implications.
+
+**Addition** ($d_{model}$ total dimensions):
+
+$$
+\mathbf{x}_i = \mathbf{e}_i + \text{PE}(i)
+$$
+
+- Keeps the dimensionality unchanged
+- Token and position information share the same vector space
+- The model must learn to disentangle the two in downstream layers
+- More parameter-efficient
+
+**Concatenation** ($2 \times d_{model}$ total dimensions):
+
+$$
+\mathbf{x}_i = [\mathbf{e}_i ; \text{PE}(i)]
+$$
+
+- Doubles the dimensionality
+- Token and position information are in separate subspaces
+- No interference between the two
+- But doubles the cost of all subsequent operations
+
+The Transformer uses addition. The scaling factor $\sqrt{d_{model}}$ applied to embeddings ensures that the embedding magnitudes are comparable to the positional encoding magnitudes, so neither dominates after addition.
 
 ---
+
+## Learned vs. Fixed Positional Encodings
+
+The Transformer paper proposes sinusoidal (fixed) encodings, but also tested learned positional embeddings:
+
+**Sinusoidal (fixed):**
+
+- No additional parameters
+- Deterministic: same positions always get the same encoding
+- Can theoretically extrapolate to sequence lengths not seen during training
+- The geometric frequency structure provides useful inductive biases
+
+**Learned:**
+
+- One learnable vector per position, stored in an embedding table of shape $(L_{max}, d_{model})$
+- More flexible: can learn any pattern the data requires
+- Cannot extrapolate beyond $L_{max}$ (the maximum training sequence length)
+- Adds $L_{max} \times d_{model}$ parameters
+
+**The paper's finding:**
+
+The original Transformer paper found that both approaches produced "nearly identical results." Despite this, the two approaches diverged in practice:
+
+- BERT uses learned positional embeddings (max length 512)
+- GPT-2 uses learned positional embeddings (max length 1024)
+- The original Transformer uses sinusoidal encodings
+- Most modern large language models use learned positions or more advanced schemes
+
+---
+
+## Beyond Sinusoidal: Modern Positional Encodings
+
+The sinusoidal approach from the original paper has been largely superseded by more sophisticated methods in modern Transformers:
+
+**Rotary Position Embeddings (RoPE):**
+
+Used in LLaMA, PaLM, and many modern LLMs. Instead of adding position information, RoPE rotates the query and key vectors based on their position:
+
+$$
+\text{RoPE}(q, pos) = R_{pos} \cdot q
+$$
+
+where $R_{pos}$ is a rotation matrix. The dot product between rotated queries and keys naturally depends on relative position.
+
+**ALiBi (Attention with Linear Biases):**
+
+Instead of modifying embeddings, ALiBi adds a position-dependent bias directly to the attention scores:
+
+$$
+\text{score}(q_i, k_j) = q_i^T k_j - m \cdot |i - j|
+$$
+
+where $m$ is a head-specific slope. This penalizes long-range attention and supports length extrapolation.
+
+**Relative Position Encodings:**
+
+Instead of encoding absolute positions, encode the relative distance between every pair of tokens. Used in Transformer-XL and T5.
+
+Each of these approaches addresses limitations of the original sinusoidal scheme, particularly the challenge of generalizing to sequence lengths longer than those seen during training.
+
+---
+
+## The 10,000 Base
+
+The constant $10{,}000$ in the denominator is a design choice, not a mathematical necessity:
+
+$$
+\omega_i = \frac{1}{10000^{2i / d_{model}}}
+$$
+
+**Why 10,000?**
+
+- It sets the longest wavelength to $10{,}000 \times 2\pi \approx 62{,}832$ positions
+- This means the encoding can distinguish positions up to roughly 62,000 apart
+- For the typical training sequences of the time (a few hundred tokens), this provided ample range
+- The specific value was likely chosen empirically
+
+**What if we change it?**
+
+- A smaller base (e.g., 100) would compress the frequency range, with the slowest dimensions cycling faster. This could lose the ability to distinguish very distant positions.
+- A larger base (e.g., 1,000,000) would spread the frequencies further apart, providing finer-grained position information but potentially making it harder for the model to learn position-dependent patterns.
+
+In practice, the base of 10,000 has proven robust across many applications and model sizes.
+
+---
+
+## Dimensional Analysis
+
+The positional encoding matrix has a clear geometric structure:
+
+**Input**: Two integers, $\text{seq\_length}$ and $d_{model}$
+
+**Output**: A matrix of shape $(\text{seq\_length}, d_{model})$
+
+- Each row is the encoding for one position
+- Each column pair $(2i, 2i+1)$ is a sine-cosine pair at frequency $\omega_i$
+
+**The division term** is often computed as:
+
+$$
+\text{div\_term}_i = e^{-2i \cdot \ln(10000) / d_{model}} = 10000^{-2i/d_{model}} = \frac{1}{10000^{2i/d_{model}}}
+$$
+
+The exponential form is used in implementations for numerical stability, avoiding computing $10000^{2i/d_{model}}$ directly (which could overflow for large $d_{model}$).
+
+**Constructing the full matrix:**
+
+1. Create a column vector of positions: $[0, 1, 2, \ldots, L-1]^T$, shape $(L, 1)$
+2. Create a row vector of division terms: $[\omega_0, \omega_1, \ldots]$, shape $(1, d_{model}/2)$
+3. Compute the outer product: positions $\times$ frequencies, shape $(L, d_{model}/2)$
+4. Apply sine to get even columns, cosine to get odd columns
+5. Interleave to get the final $(L, d_{model})$ matrix
+
+---
+
+## Positional Encoding and Attention Patterns
+
+The positional encoding influences attention patterns in important ways.
+
+**Local attention bias:**
+
+Because nearby positions have similar encodings (high dot product), the attention mechanism naturally tends to attend more to nearby tokens. This is a useful inductive bias for language, where nearby words are often more relevant than distant ones.
+
+**Long-range connections:**
+
+The low-frequency dimensions (slow-changing sine and cosine) allow the model to detect relationships between distant positions. Different attention heads can specialize: some may focus on local patterns using high-frequency position information, while others may capture long-range dependencies using low-frequency information.
+
+**Position-dependent attention:**
+
+After training, different attention heads learn to use position information differently:
+
+- Some heads learn a "previous word" attention pattern
+- Some learn to attend to specific relative positions (e.g., position $-3$ for a particular syntactic pattern)
+- Some learn to attend to a fixed absolute position (e.g., the first token)
+
+These diverse attention patterns emerge from the rich multi-scale position information provided by the sinusoidal encoding.
+
+---
+
+## Why Positional Encoding Works
+
+At first glance, it might seem problematic to add two unrelated signals (token identity and position) into the same vector. Won't the position information corrupt the token information, or vice versa?
+
+In practice, the high-dimensional space provides enough room for both. With $d_{model} = 512$, the model has 512 dimensions to represent both what a token is and where it is. The Transformer layers learn to use some dimensions primarily for position and others primarily for content.
+
+**Information-theoretic perspective:**
+
+- Token embeddings typically occupy a low-dimensional subspace of $\mathbb{R}^{d_{model}}$
+- Positional encodings occupy a different low-dimensional subspace
+- As long as these subspaces do not overlap too much, the model can distinguish the two signals
+
+This is why the scaling factor on embeddings matters: it ensures the two signals have comparable magnitudes, so neither overwhelms the other.
