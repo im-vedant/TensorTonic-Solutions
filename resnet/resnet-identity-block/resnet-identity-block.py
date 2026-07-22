@@ -1,16 +1,12 @@
 import numpy as np
 
-def relu(x):
-    return np.maximum(0, x)
+def identity_block(x, W1, W2):
+    x = np.array(x, dtype=float)
+    W1 = np.array(W1, dtype=float)
+    W2 = np.array(W2, dtype=float)
+    identity = x.copy()
+    out = np.maximum(0, x @ W1.T)
+    out = out @ W2.T
+    result = np.maximum(0, out + identity)
+    return [[round(float(v), 3) for v in row] for row in result]
 
-class IdentityBlock:
-    def __init__(self, channels: int):
-        self.channels = channels
-        self.W1 = np.random.randn(channels, channels) * 0.01
-        self.W2 = np.random.randn(channels, channels) * 0.01
-    
-    def forward(self, x: np.ndarray) -> np.ndarray:
-        identity = x
-        out = relu(x @ self.W1.T)
-        out = relu(out @ self.W2.T)
-        return out + identity
