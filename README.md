@@ -15,7 +15,6 @@ This repository contains my personal solutions to these problems, automatically 
 
 Verified machine learning implementations completed on [TensorTonic](https://test.tensortonic.com).
 
-![TensorTonic Verified Solutions](https://test.tensortonic.com/api/badge/vedantgupta.svg)
 
 | Problem | Link |
 |---|---|
