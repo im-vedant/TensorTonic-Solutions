@@ -1,4 +1,4 @@
-adad fla jsdlkfa## What Activation Functions Do
+## What Activation Functions Do
 
 A neural network is built from layers of linear transformations: multiply by a weight matrix, add a bias. The problem is that stacking linear functions just gives you another linear function. Two layers with no activation:
 
