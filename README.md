@@ -13,14 +13,16 @@ This repository contains my personal solutions to these problems, automatically 
 <!-- tensortonic:start -->
 # Vedant Gupta's TensorTonic Solutions
 
-Verified machine learning implementations completed on [TensorTonic](https://tensortonic.com).
+Verified machine learning implementations completed on [TensorTonic](https://test.tensortonic.com).
 
+![TensorTonic Verified Solutions](https://test.tensortonic.com/api/badge/vedantgupta.svg)
 
 | Problem | Link |
 |---|---|
 | Logistic Regression Training Loop | https://test.tensortonic.com/problems/logistic-regression-training |
 | Matrix Transpose | https://test.tensortonic.com/problems/matrix-transpose |
 | Pad Sequences | https://test.tensortonic.com/problems/pad-sequences |
+| Implement Positional Encoding (sin/cos) | https://test.tensortonic.com/problems/positional-encoding |
 | Implement ReLU Activation | https://test.tensortonic.com/problems/relu-activation |
 | Implement Sigmoid in NumPy | https://test.tensortonic.com/problems/sigmoid-numpy |
 | Scaled Dot-Product Attention | https://test.tensortonic.com/research/transformer/transformers-attention |
@@ -40,5 +42,5 @@ Verified machine learning implementations completed on [TensorTonic](https://ten
 | Leaky ReLU | https://test.tensortonic.com/study-plans/cuda-basics/cuda/leaky-relu |
 | Vector Addition | https://test.tensortonic.com/study-plans/triton-basics/triton/triton-vector-addition |
 
-View my verified ML profile: [TensorTonic profile](https://test.tensortonic.com/profile/im-vedant)
+View my verified ML profile: [TensorTonic profile](https://test.tensortonic.com/profile/vedantgupta)
 <!-- tensortonic:end -->
