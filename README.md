@@ -15,9 +15,13 @@ This repository contains my personal solutions to these problems, automatically 
 
 Verified machine learning implementations completed on [TensorTonic](https://test.tensortonic.com).
 
+<p align="center">
+  <img src="https://test.tensortonic.com/api/badge/vedantgupta.svg" alt="TensorTonic Verified Solutions" width="100%" />
+</p>
 
 | Problem | Link |
 |---|---|
+| Implement Gradient Descent for a 1D Quadratic | https://test.tensortonic.com/problems/gradient-descent-quadratic |
 | Logistic Regression Training Loop | https://test.tensortonic.com/problems/logistic-regression-training |
 | Matrix Transpose | https://test.tensortonic.com/problems/matrix-transpose |
 | Pad Sequences | https://test.tensortonic.com/problems/pad-sequences |
