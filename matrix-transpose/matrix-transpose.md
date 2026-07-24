@@ -42,11 +42,13 @@ Notice what happened:
 Vectors are special cases:
 
 **Column vector** (shape $n \times 1$):
+
 $$
 v = \begin{bmatrix} 1 \\ 2 \\ 3 \end{bmatrix}
 $$
 
 **Its transpose is a row vector** (shape $1 \times n$):
+
 $$
 v^T = \begin{bmatrix} 1 & 2 & 3 \end{bmatrix}
 $$
@@ -58,26 +60,31 @@ This is why you often see notation like $x^T y$ for the dot product: it is a row
 ## Key Properties of the Transpose
 
 **Double transpose returns the original:**
+
 $$
 (A^T)^T = A
 $$
 
 **Transpose of a sum:**
+
 $$
 (A + B)^T = A^T + B^T
 $$
 
 **Transpose of a product (order reverses!):**
+
 $$
 (AB)^T = B^T A^T
 $$
 
 This reversal is crucial. If you have a chain of matrices, transposing reverses the order:
+
 $$
 (ABC)^T = C^T B^T A^T
 $$
 
 **Transpose of a scalar multiple:**
+
 $$
 (cA)^T = c A^T
 $$
@@ -91,6 +98,7 @@ $$
 A matrix is symmetric if $A^T = A$. This means $A_{ij} = A_{ji}$ for all entries. The matrix equals its mirror image across the diagonal.
 
 Example:
+
 $$
 \begin{bmatrix} 1 & 2 & 3 \\ 2 & 4 & 5 \\ 3 & 5 & 6 \end{bmatrix}
 $$
@@ -105,6 +113,7 @@ Symmetric matrices appear constantly in ML:
 A matrix is skew-symmetric if $A^T = -A$. The diagonal must be zero.
 
 Example:
+
 $$
 \begin{bmatrix} 0 & 2 & -3 \\ -2 & 0 & 5 \\ 3 & -5 & 0 \end{bmatrix}
 $$

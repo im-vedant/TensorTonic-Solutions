@@ -11,4 +11,3 @@ def matrix_transpose(A):
         for j in range(m):
             T[j, i] = A[i, j]
     return T
-
